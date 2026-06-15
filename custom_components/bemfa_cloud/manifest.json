@@ -11,6 +11,7 @@
   "documentation": "https://github.com/bemfa/bemfa_cloud_ha",
   "integration_type": "hub",
   "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/bemfa/bemfa_cloud_ha/issues",
   "requirements": [],
   "version": "0.1.0"
 }

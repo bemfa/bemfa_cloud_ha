@@ -1,10 +1,155 @@
 {
   "config": {
+    "step": {
+      "user": {
+        "title": "Bemfa Cloud",
+        "menu_options": {
+          "keys": "Enter keys manually",
+          "pick_implementation": "Sign in with Bemfa OAuth"
+        }
+      },
+      "keys": {
+        "title": "Bemfa Cloud credentials",
+        "data": {
+          "uid": "Bemfa private key"
+        }
+      }
+    },
     "error": {
       "invalid_uid": "Invalid Bemfa private key"
     },
     "abort": {
-      "already_configured": "This Bemfa account is already configured"
+      "already_configured": "This Bemfa account is already configured",
+      "oauth_failed": "OAuth authentication failed",
+      "oauth_missing_uid": "OAuth succeeded, but the token response did not include a Bemfa private key."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Bemfa Cloud",
+        "menu_options": {
+          "create_all_syncs": "Sync multiple entities",
+          "create_sync": "Sync one entity",
+          "modify_sync": "Edit sync",
+          "destroy_sync": "Remove sync"
+        }
+      },
+      "create_all_syncs": {
+        "title": "Sync multiple entities",
+        "description": "Selected entities will be created as Bemfa TCP V2 topics in batches.",
+        "data": {
+          "select": "Entities"
+        }
+      },
+      "create_sync": {
+        "title": "Sync one entity",
+        "data": {
+          "select": "Entity"
+        }
+      },
+      "modify_sync": {
+        "title": "Edit sync",
+        "data": {
+          "select": "Entity"
+        }
+      },
+      "destroy_sync": {
+        "title": "Remove sync",
+        "data": {
+          "select": "Topics"
+        }
+      },
+      "empty": {
+        "title": "No available syncs"
+      },
+      "sync_config_sensor": {
+        "title": "Configure sensor",
+        "data": {
+          "name": "Name",
+          "temperature": "Temperature sensor",
+          "humidity": "Humidity sensor",
+          "illuminance": "Illuminance sensor",
+          "pm25": "PM2.5 sensor",
+          "co2": "CO2 sensor"
+        }
+      },
+      "sync_config_binary_sensor": {
+        "title": "Configure binary sensor",
+        "data": {
+          "name": "Name"
+        }
+      },
+      "sync_config_climate": {
+        "title": "Configure climate",
+        "data": {
+          "name": "Name",
+          "fan_speed_0_value": "Auto fan",
+          "fan_speed_1_value": "Fan speed 1",
+          "fan_speed_2_value": "Fan speed 2",
+          "fan_speed_3_value": "Fan speed 3",
+          "fan_speed_4_value": "Fan speed 4",
+          "fan_speed_5_value": "Fan speed 5",
+          "swing_off_value": "Swing off",
+          "swing_horizontal_value": "Horizontal swing",
+          "swing_vertical_value": "Vertical swing",
+          "swing_both_value": "Both swing"
+        }
+      },
+      "sync_config_cover": {
+        "title": "Configure cover",
+        "data": {
+          "name": "Name"
+        }
+      },
+      "sync_config_fan": {
+        "title": "Configure fan",
+        "data": {
+          "name": "Name"
+        }
+      },
+      "sync_config_light": {
+        "title": "Configure light",
+        "data": {
+          "name": "Name"
+        }
+      },
+      "sync_config_switch": {
+        "title": "Configure switch",
+        "data": {
+          "name": "Name"
+        }
+      },
+      "sync_config_outlet": {
+        "title": "Configure outlet",
+        "data": {
+          "name": "Name"
+        }
+      },
+      "sync_config_thermostat": {
+        "title": "Configure thermostat",
+        "data": {
+          "name": "Name"
+        }
+      },
+      "sync_config_water_heater": {
+        "title": "Configure water heater",
+        "data": {
+          "name": "Name"
+        }
+      },
+      "sync_config_tv": {
+        "title": "Configure TV",
+        "data": {
+          "name": "Name"
+        }
+      },
+      "sync_config_air_purifier": {
+        "title": "Configure air purifier",
+        "data": {
+          "name": "Name"
+        }
+      }
     }
   }
 }
