@@ -78,7 +78,11 @@ class Sensor(Sync):
         co2_sensors: dict[str, str] = {}
 
         # filter entities in our area
-        a_entities = area_entities(self._hass, self._entity_id.split(".")[1])
+        try:
+            area_id = self._entity_id.split(".", 1)[1]
+        except IndexError:
+            area_id = ""
+        a_entities = area_entities(self._hass, area_id) if area_id else set()
 
         for state in self._hass.states.async_all(SENSOR_DOMAIN):
             if state.entity_id not in a_entities:

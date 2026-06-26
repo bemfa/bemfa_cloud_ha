@@ -14,7 +14,20 @@ from homeassistant.helpers import entity_registry
 from homeassistant.util.decorator import Registry
 from homeassistant.util.read_only_dict import ReadOnlyDict
 
-from .const import MSG_OFF, MSG_ON, MSG_SEPARATOR, OPTIONS_NAME, TOPIC_PREFIX, TopicSuffix
+from .const import (
+    MSG_OFF,
+    MSG_ON,
+    MSG_SEPARATOR,
+    OPTIONS_FAN_SPEED_0_VALUE,
+    OPTIONS_FAN_SPEED_1_VALUE,
+    OPTIONS_FAN_SPEED_2_VALUE,
+    OPTIONS_FAN_SPEED_3_VALUE,
+    OPTIONS_FAN_SPEED_4_VALUE,
+    OPTIONS_FAN_SPEED_5_VALUE,
+    OPTIONS_NAME,
+    TOPIC_PREFIX,
+    TopicSuffix,
+)
 
 _LOGGING = logging.getLogger(__name__)
 UNPUBLISHABLE_STATES = {STATE_UNAVAILABLE, STATE_UNKNOWN}
@@ -189,6 +202,8 @@ class Sync(ABC):
                     payload["mode"] = parts[2]
                 else:
                     payload["t"] = _to_int(parts[2])
+            if suffix != TopicSuffix.WATER_HEATER and len(parts) > 3 and parts[3] != "":
+                payload["v"] = _to_int(parts[3])
             return payload
 
         if suffix == TopicSuffix.SENSOR:
@@ -374,9 +389,13 @@ class ControllableSync(Sync):
 
         if suffix in (TopicSuffix.CLIMATE, TopicSuffix.THERMOSTAT):
             from homeassistant.components.climate import (
+                ATTR_FAN_MODES,
                 ATTR_HVAC_MODE,
+                ATTR_PRESET_MODES,
                 DOMAIN,
+                SERVICE_SET_FAN_MODE,
                 SERVICE_SET_HVAC_MODE,
+                SERVICE_SET_PRESET_MODE,
                 SERVICE_SET_TEMPERATURE,
             )
             from homeassistant.const import ATTR_TEMPERATURE, SERVICE_TURN_OFF, SERVICE_TURN_ON
@@ -384,20 +403,41 @@ class ControllableSync(Sync):
             if payload.get("on", True) is False:
                 self._async_call_service(DOMAIN, SERVICE_TURN_OFF, {})
                 return True
-            if "on" in payload and len(payload) == 1:
+            if payload.get("on") is True:
                 self._async_call_service(DOMAIN, SERVICE_TURN_ON, {})
             if "mode" in payload:
-                mode_index = _to_int(payload["mode"]) - 1
-                if 0 <= mode_index < 5:
+                mode = _to_int(payload["mode"])
+                hvac_mode = _climate_hvac_mode(mode)
+                if hvac_mode is not None:
                     self._async_call_service(
                         DOMAIN,
                         SERVICE_SET_HVAC_MODE,
-                        {ATTR_HVAC_MODE: _climate_supported_modes()[mode_index]},
+                        {ATTR_HVAC_MODE: hvac_mode},
+                    )
+                elif preset_mode := _climate_preset_mode(
+                    mode, attributes.get(ATTR_PRESET_MODES, [])
+                ):
+                    self._async_call_service(
+                        DOMAIN,
+                        SERVICE_SET_PRESET_MODE,
+                        {"preset_mode": preset_mode},
                     )
             if "t" in payload:
                 self._async_call_service(
                     DOMAIN, SERVICE_SET_TEMPERATURE, {ATTR_TEMPERATURE: _to_int(payload["t"])}
                 )
+            if "v" in payload:
+                fan_mode = _climate_fan_mode(
+                    _to_int(payload["v"]),
+                    self._config,
+                    attributes.get(ATTR_FAN_MODES, []),
+                )
+                if fan_mode is not None:
+                    self._async_call_service(
+                        DOMAIN,
+                        SERVICE_SET_FAN_MODE,
+                        {"fan_mode": fan_mode},
+                    )
             return True
 
         if suffix == TopicSuffix.WATER_HEATER:
@@ -557,3 +597,56 @@ def _climate_supported_modes() -> list[Any]:
         HVACMode.FAN_ONLY,
         HVACMode.DRY,
     ]
+
+
+def _climate_hvac_mode(mode: int) -> Any | None:
+    modes = _climate_supported_modes()
+    if 1 <= mode <= len(modes):
+        return modes[mode - 1]
+    return None
+
+
+def _climate_preset_mode(mode: int, preset_modes: list[str]) -> str | None:
+    preset_names = {
+        6: ("sleep", "Sleep", "sleep_mode", "睡眠"),
+        7: ("eco", "Eco", "energy_saving", "节能"),
+    }.get(mode, ())
+    preset_modes_by_lower = {str(item).lower(): item for item in preset_modes}
+    for preset_name in preset_names:
+        if preset_name.lower() in preset_modes_by_lower:
+            return preset_modes_by_lower[preset_name.lower()]
+    return None
+
+
+def _climate_fan_mode(
+    speed: int, sync_config: dict[str, str], fan_modes: list[str]
+) -> str | None:
+    speed_to_config_key = {
+        0: OPTIONS_FAN_SPEED_0_VALUE,
+        1: OPTIONS_FAN_SPEED_1_VALUE,
+        2: OPTIONS_FAN_SPEED_2_VALUE,
+        3: OPTIONS_FAN_SPEED_3_VALUE,
+        4: OPTIONS_FAN_SPEED_4_VALUE,
+        5: OPTIONS_FAN_SPEED_5_VALUE,
+    }
+    key = speed_to_config_key.get(speed)
+    if key is None:
+        return None
+    if key in sync_config:
+        return sync_config[key]
+
+    if not fan_modes:
+        return None
+    if speed == 0:
+        return _first_matching_mode(fan_modes, ("auto", "自动"))
+
+    index = min(speed - 1, len(fan_modes) - 1)
+    return fan_modes[index]
+
+
+def _first_matching_mode(modes: list[str], names: tuple[str, ...]) -> str | None:
+    modes_by_lower = {str(item).lower(): item for item in modes}
+    for name in names:
+        if name.lower() in modes_by_lower:
+            return modes_by_lower[name.lower()]
+    return None

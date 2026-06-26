@@ -25,37 +25,41 @@
     }
   },
   "options": {
+    "error": {
+      "cannot_sync": "同步到巴法云失败，请检查私钥是否正确、网络是否可访问，并查看 Home Assistant 日志中的详细错误。"
+    },
     "step": {
       "init": {
         "title": "Bemfa Cloud",
         "menu_options": {
-          "create_all_syncs": "批量同步实体",
-          "create_sync": "同步单个实体",
-          "modify_sync": "编辑同步",
-          "destroy_sync": "删除同步"
+          "create_all_syncs": "批量添加同步",
+          "create_sync": "添加单个同步",
+          "modify_sync": "编辑同步配置",
+          "destroy_sync": "移除本地同步"
         }
       },
       "create_all_syncs": {
-        "title": "批量同步实体",
-        "description": "所选实体会通过批量接口创建为巴法云 TCP V2 主题。",
+        "title": "批量添加同步",
+        "description": "为所选实体批量创建巴法云 TCP V2 主题，并开始同步状态。",
         "data": {
           "select": "实体"
         }
       },
       "create_sync": {
-        "title": "同步单个实体",
+        "title": "添加单个同步",
         "data": {
           "select": "实体"
         }
       },
       "modify_sync": {
-        "title": "编辑同步",
+        "title": "编辑同步配置",
         "data": {
           "select": "实体"
         }
       },
       "destroy_sync": {
-        "title": "删除同步",
+        "title": "移除本地同步",
+        "description": "只会停止此集成继续同步所选主题，不会删除巴法云云端主题。",
         "data": {
           "select": "主题"
         }

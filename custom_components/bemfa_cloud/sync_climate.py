@@ -11,14 +11,17 @@ from homeassistant.components.climate import (
     ATTR_FAN_MODES,
     ATTR_HVAC_MODE,
     ATTR_HVAC_MODES,
+    ATTR_PRESET_MODE,
     ATTR_SWING_MODE,
     ATTR_SWING_MODES,
+    ATTR_PRESET_MODES,
     FAN_AUTO,
     FAN_LOW,
     FAN_MEDIUM,
     FAN_HIGH,
     SERVICE_SET_FAN_MODE,
     SERVICE_SET_HVAC_MODE,
+    SERVICE_SET_PRESET_MODE,
     SERVICE_SET_TEMPERATURE,
     SERVICE_SET_SWING_MODE,
     SWING_OFF,
@@ -57,7 +60,13 @@ from .const import (
     TopicSuffix,
 )
 from .utils import has_key
-from .sync import SYNC_TYPES, ControllableSync
+from .sync import (
+    SYNC_TYPES,
+    ControllableSync,
+    _climate_fan_mode,
+    _climate_hvac_mode,
+    _climate_preset_mode,
+)
 
 _LOGGING = logging.getLogger(__name__)
 
@@ -123,6 +132,19 @@ def _get_detail_value(
     return detail_cfg[CFG_VALUES][0]
 
 
+def _bemfa_climate_mode(
+    state: str, attributes: ReadOnlyDict[Mapping[str, Any]]
+) -> int | str:
+    preset_mode = str(attributes.get(ATTR_PRESET_MODE, "")).lower()
+    if preset_mode in ("sleep", "sleep_mode", "睡眠"):
+        return 6
+    if preset_mode in ("eco", "energy_saving", "节能"):
+        return 7
+    if state in SUPPORTED_HVAC_MODES:
+        return SUPPORTED_HVAC_MODES.index(state) + 1
+    return ""
+
+
 @SYNC_TYPES.register("climate")
 class Climate(ControllableSync):
     """Sync a hass climate entity to bemfa climate device."""
@@ -185,9 +207,7 @@ class Climate(ControllableSync):
     ) -> list[Callable[[str, ReadOnlyDict[Mapping[str, Any]]], str | int]]:
         return [
             lambda state, attributes: MSG_OFF if state == HVACMode.OFF else MSG_ON,
-            lambda state, attributes: SUPPORTED_HVAC_MODES.index(state) + 1
-            if state in SUPPORTED_HVAC_MODES
-            else "",
+            lambda state, attributes: _bemfa_climate_mode(state, attributes),
             lambda state, attributes: round(attributes[ATTR_TEMPERATURE])
             if has_key(attributes, ATTR_TEMPERATURE)
             else "",
@@ -215,15 +235,7 @@ class Climate(ControllableSync):
             (
                 0,
                 2,
-                lambda msg, attributes: (
-                    DOMAIN,
-                    SERVICE_SET_HVAC_MODE,
-                    {ATTR_HVAC_MODE: SUPPORTED_HVAC_MODES[msg[1] - 1]},
-                )
-                if len(msg) > 1 and msg[1] >= 1 and msg[1] <= 5
-                else (DOMAIN, SERVICE_TURN_ON, {})
-                if msg[0] == MSG_ON and len(msg) == 1
-                else (DOMAIN, SERVICE_TURN_OFF, {}),
+                self._resolve_power_or_mode,
             ),
             (
                 2,
@@ -237,17 +249,7 @@ class Climate(ControllableSync):
             (
                 3,
                 4,
-                lambda msg, attributes: (
-                    DOMAIN,
-                    SERVICE_SET_FAN_MODE,
-                    {
-                        ATTR_FAN_MODE: self._config[
-                            DETAILS_CFG[0][CFG_KEYS][
-                                DETAILS_CFG[0][CFG_VALUES].index(msg[0])
-                            ]
-                        ]
-                    },
-                ),
+                self._resolve_fan_mode,
             ),
             (
                 4,
@@ -267,6 +269,33 @@ class Climate(ControllableSync):
                 ),
             ),
         ]
+
+    def _resolve_power_or_mode(
+        self, msg: list[str | int], attributes: ReadOnlyDict[Mapping[str, Any]]
+    ) -> tuple[str, str, dict[str, Any]]:
+        if msg[0] == MSG_OFF:
+            return DOMAIN, SERVICE_TURN_OFF, {}
+        if len(msg) == 1:
+            return DOMAIN, SERVICE_TURN_ON, {}
+
+        mode = int(msg[1])
+        if hvac_mode := _climate_hvac_mode(mode):
+            return DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_HVAC_MODE: hvac_mode}
+        if preset_mode := _climate_preset_mode(mode, attributes.get(ATTR_PRESET_MODES, [])):
+            return DOMAIN, SERVICE_SET_PRESET_MODE, {"preset_mode": preset_mode}
+        return DOMAIN, SERVICE_TURN_ON, {}
+
+    def _resolve_fan_mode(
+        self, msg: list[str | int], attributes: ReadOnlyDict[Mapping[str, Any]]
+    ) -> tuple[str, str, dict[str, Any]]:
+        fan_mode = _climate_fan_mode(
+            int(msg[0]),
+            self._config,
+            attributes.get(ATTR_FAN_MODES, []),
+        )
+        if fan_mode is None:
+            return DOMAIN, SERVICE_TURN_ON, {}
+        return DOMAIN, SERVICE_SET_FAN_MODE, {ATTR_FAN_MODE: fan_mode}
 
 
 @SYNC_TYPES.register("thermostat")

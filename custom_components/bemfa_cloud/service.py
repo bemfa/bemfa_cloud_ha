@@ -69,7 +69,10 @@ class BemfaCloudService:
 
         syncs: list[Sync] = []
         for sync_type in SYNC_TYPES.values():
-            syncs.extend(sync_type.collect_supported_syncs(self._hass))
+            try:
+                syncs.extend(sync_type.collect_supported_syncs(self._hass))
+            except Exception as err:  # noqa: BLE001
+                LOGGER.warning("Failed to collect %s syncs: %s", sync_type.__name__, err)
 
         syncs = [sync for sync in syncs if not self._is_excluded_sync(sync)]
         covered_entity_ids = {sync.entity_id for sync in syncs}
@@ -83,19 +86,22 @@ class BemfaCloudService:
 
         fallback_syncs: list[Sync] = []
         for state in self._hass.states.async_all():
-            if state.entity_id in covered_entity_ids:
-                continue
-            if self._is_excluded_entity_id(state.entity_id):
-                continue
+            try:
+                if state.entity_id in covered_entity_ids:
+                    continue
+                if self._is_excluded_entity_id(state.entity_id):
+                    continue
 
-            domain = state.entity_id.split(".", 1)[0]
-            if not (
-                self._hass.services.has_service(domain, SERVICE_TURN_ON)
-                and self._hass.services.has_service(domain, SERVICE_TURN_OFF)
-            ):
-                continue
+                domain = state.entity_id.split(".", 1)[0]
+                if not (
+                    self._hass.services.has_service(domain, SERVICE_TURN_ON)
+                    and self._hass.services.has_service(domain, SERVICE_TURN_OFF)
+                ):
+                    continue
 
-            fallback_syncs.append(Switch(self._hass, state.entity_id, state.name))
+                fallback_syncs.append(Switch(self._hass, state.entity_id, state.name))
+            except Exception as err:  # noqa: BLE001
+                LOGGER.warning("Failed to collect fallback sync for %s: %s", state.entity_id, err)
         return fallback_syncs
 
     async def async_create_sync(self, sync: Sync, user_input: dict[str, str]) -> None:
@@ -272,6 +278,6 @@ class BemfaCloudService:
             return False
         if entry.platform in EXCLUDED_SOURCE_PLATFORMS:
             return True
-        return entry.unique_id.startswith(
+        return bool(entry.unique_id) and entry.unique_id.startswith(
             tuple(f"{platform}_" for platform in EXCLUDED_SOURCE_PLATFORMS)
         )

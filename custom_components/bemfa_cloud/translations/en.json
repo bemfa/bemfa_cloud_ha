@@ -25,37 +25,41 @@
     }
   },
   "options": {
+    "error": {
+      "cannot_sync": "Failed to sync to Bemfa Cloud. Check that the private key is correct, the network is reachable, and see the Home Assistant logs for details."
+    },
     "step": {
       "init": {
         "title": "Bemfa Cloud",
         "menu_options": {
-          "create_all_syncs": "Sync multiple entities",
-          "create_sync": "Sync one entity",
-          "modify_sync": "Edit sync",
-          "destroy_sync": "Remove sync"
+          "create_all_syncs": "Add syncs in bulk",
+          "create_sync": "Add one sync",
+          "modify_sync": "Edit sync settings",
+          "destroy_sync": "Remove local sync"
         }
       },
       "create_all_syncs": {
-        "title": "Sync multiple entities",
-        "description": "Selected entities will be created as Bemfa TCP V2 topics in batches.",
+        "title": "Add syncs in bulk",
+        "description": "Create Bemfa TCP V2 topics for the selected entities and start syncing their states.",
         "data": {
           "select": "Entities"
         }
       },
       "create_sync": {
-        "title": "Sync one entity",
+        "title": "Add one sync",
         "data": {
           "select": "Entity"
         }
       },
       "modify_sync": {
-        "title": "Edit sync",
+        "title": "Edit sync settings",
         "data": {
           "select": "Entity"
         }
       },
       "destroy_sync": {
-        "title": "Remove sync",
+        "title": "Remove local sync",
+        "description": "This only stops this integration from syncing the selected topics. It does not delete topics from Bemfa Cloud.",
         "data": {
           "select": "Topics"
         }

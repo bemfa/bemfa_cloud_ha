@@ -40,6 +40,8 @@ from .const import (
 )
 from .sync import Sync
 
+ERROR_CANNOT_SYNC = "cannot_sync"
+
 STEP_KEYS_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_UID): str,
@@ -188,7 +190,15 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         service = self._get_service()
         if user_input is not None:
             syncs = [self._sync_dict[entity_id] for entity_id in user_input[OPTIONS_SELECT]]
-            await service.async_create_syncs(syncs)
+            try:
+                await service.async_create_syncs(syncs)
+            except Exception as err:  # noqa: BLE001
+                LOGGER.warning("Failed to create Bemfa syncs: %s", err)
+                return self.async_show_form(
+                    step_id="create_all_syncs",
+                    data_schema=self._create_all_syncs_schema(),
+                    errors={"base": ERROR_CANNOT_SYNC},
+                )
             for sync in syncs:
                 self._config[sync.topic] = sync.config.copy()
             return self.async_create_entry(title="", data={OPTIONS_CONFIG: self._config})
@@ -199,17 +209,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="create_all_syncs",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(OPTIONS_SELECT): SelectSelector(
-                        SelectSelectorConfig(
-                            options=self._options_from_syncs(self._sync_dict),
-                            mode=SelectSelectorMode.LIST,
-                            multiple=True,
-                        )
-                    )
-                }
-            ),
+            data_schema=self._create_all_syncs_schema(),
         )
 
     async def async_step_create_sync(
@@ -322,10 +322,18 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             return await self._async_step_sync_config()
 
         service = self._get_service()
-        if self._is_create:
-            await service.async_create_sync(self._sync, user_input)
-        else:
-            await service.async_modify_sync(self._sync, user_input)
+        try:
+            if self._is_create:
+                await service.async_create_sync(self._sync, user_input)
+            else:
+                await service.async_modify_sync(self._sync, user_input)
+        except Exception as err:  # noqa: BLE001
+            LOGGER.warning("Failed to save Bemfa sync for %s: %s", self._sync.entity_id, err)
+            return self.async_show_form(
+                step_id=self._sync.get_config_step_id(),
+                data_schema=vol.Schema(self._sync.generate_details_schema()),
+                errors={"base": ERROR_CANNOT_SYNC},
+            )
 
         self._config[self._sync.topic] = self._sync.config.copy()
         return self.async_create_entry(title="", data={OPTIONS_CONFIG: self._config})
@@ -398,6 +406,19 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             SelectOptionDict(value=sync.entity_id, label=sync.generate_option_label())
             for sync in syncs.values()
         ]
+
+    def _create_all_syncs_schema(self) -> vol.Schema:
+        return vol.Schema(
+            {
+                vol.Required(OPTIONS_SELECT): SelectSelector(
+                    SelectSelectorConfig(
+                        options=self._options_from_syncs(self._sync_dict),
+                        mode=SelectSelectorMode.LIST,
+                        multiple=True,
+                    )
+                )
+            }
+        )
 
     def _get_service(self):
         return self.hass.data[DOMAIN][self._entry_id]["service"]
