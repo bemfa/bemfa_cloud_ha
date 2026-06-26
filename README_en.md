@@ -21,7 +21,7 @@ _Sync Home Assistant devices to Bemfa Cloud._
 - **TCP long connection**: Subscribes to control messages through Bemfa TCP JSON V2
 - **State sync**: Publishes HA state changes back to Bemfa Cloud
 - **Name and room sync**: Mirrors HA entity name, area assignment, and area name changes to Bemfa topic name and room
-- **Stable topics**: Generates topics from Home Assistant entity registry stable IDs, so changing entity ID, name, or room does not change the topic
+- **More stable sync relationships**: Renaming entities or changing rooms usually does not create duplicate Bemfa devices
 - **Source filtering**: Skips BeHome-created HA entities to avoid syncing Bemfa devices back to Bemfa Cloud
 
 ## Supported Device Types
@@ -78,7 +78,7 @@ If Bemfa Cloud is not listed in the HACS store yet, or you want to test a develo
 
 ### OAuth Mode
 
-OAuth mode reuses the BeHome authentication flow. Users who use OAuth need to create application credentials first.
+Most users should use private key mode. OAuth mode reuses the BeHome authentication flow and is mainly for scenarios that need the BeHome authorization flow. Users who use OAuth need to create application credentials first.
 
 1. Go to **Settings** -> **Devices & Services** -> **Helpers** -> **Application Credentials**
 2. Create a new credential:
@@ -91,7 +91,29 @@ OAuth mode reuses the BeHome authentication flow. Users who use OAuth need to cr
 
 If OAuth redirects to `homeassistant.local` and the browser cannot open it, configure the correct Home Assistant URL in **Settings** -> **System** -> **Network**. For local Docker testing, use `http://localhost:8123`. For LAN access, use `http://your-ha-host-ip:8123`.
 
-## How It Works
+## Notes
+
+- This integration syncs **HA -> Bemfa Cloud**
+- BeHome syncs **Bemfa Cloud -> HA**
+- Both integrations can be installed together. Bemfa Cloud skips BeHome-created entities to avoid duplicates and control loops
+- The integration uses stable Home Assistant entity identifiers when possible. Entities without a stable identifier fall back to `entity_id`, so changing `entity_id` may create a new Bemfa topic
+- After upgrading from an older version, if duplicate devices appear in Bemfa Cloud, remove the old devices manually from the Bemfa console
+
+## FAQ
+
+### What should I do if sync fails?
+
+Check that the Bemfa private key is correct, Home Assistant can access the internet, and the Home Assistant logs include Bemfa Cloud error details.
+
+### Does removing a local sync delete the Bemfa Cloud device?
+
+No. It only stops this integration from syncing that entity. The Bemfa Cloud topic must be removed manually from the Bemfa console.
+
+### What happens if I change a Home Assistant entity ID?
+
+For entities without a stable identifier, changing `entity_id` may create a new device in Bemfa Cloud.
+
+## Implementation Notes
 
 1. The integration scans supported HA entities
 2. It excludes entities created by BeHome and Bemfa Cloud itself
@@ -101,31 +123,14 @@ If OAuth redirects to `homeassistant.local` and the browser cannot open it, conf
 6. It calls HA services when Bemfa control messages are received
 7. It publishes HA state changes back to Bemfa Cloud
 
-## Topic Rule
-
-Topics are generated as:
-
-```text
-ha + first 12 chars of md5(stable source ID) + 3-digit device type suffix
-```
-
-Stable source ID priority:
-
-1. HA entity registry `unique_id`
-2. HA entity registry `entry.id`
-3. `entity_id` only when the entity is not in the registry
-
-## Notes
-
-- This integration syncs **HA -> Bemfa Cloud**
-- BeHome syncs **Bemfa Cloud -> HA**
-- Both integrations can be installed together. Bemfa Cloud skips BeHome-created entities to avoid duplicates and control loops
-- If older versions already created topics with the old topic rule, switching to the stable rule may create new topics. Old topics should be removed manually from Bemfa Cloud
-
 ## Support
 
 - [GitHub Issues](https://github.com/bemfa/bemfa_cloud_ha/issues)
 - [Home Assistant Community Forum](https://community.home-assistant.io/)
+
+## Acknowledgements
+
+Thanks to [larry-wong/bemfa](https://github.com/larry-wong/bemfa) for reference and inspiration.
 
 ## License
 
