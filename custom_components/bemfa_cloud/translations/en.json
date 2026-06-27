@@ -5,6 +5,7 @@
         "title": "Bemfa Cloud",
         "menu_options": {
           "keys": "Enter keys manually",
+          "wechat_scan": "Sign in with WeChat QR code",
           "pick_implementation": "Sign in with Bemfa OAuth"
         }
       },
@@ -13,13 +14,27 @@
         "data": {
           "uid": "Bemfa private key"
         }
+      },
+      "wechat_scan": {
+        "title": "Sign in with WeChat",
+        "description": "Scan this QR code with WeChat. This page will continue automatically after the scan succeeds.\n\n![WeChat QR code]({qr_image})"
       }
     },
+    "progress": {
+      "wechat_scan": "Scan this QR code with WeChat. This page will continue automatically after the scan succeeds.\n\n![WeChat QR code]({qr_image})"
+    },
     "error": {
-      "invalid_uid": "Invalid Bemfa private key"
+      "invalid_uid": "Invalid Bemfa private key",
+      "wechat_not_scanned": "No successful WeChat scan was found yet. Scan the QR code, then submit again.",
+      "wechat_qr_failed": "Failed to get the WeChat QR code. Try again later.",
+      "wechat_login_failed": "Failed to complete WeChat login. Try again later."
     },
     "abort": {
       "already_configured": "This Bemfa account is already configured",
+      "single_instance_allowed": "Bemfa Cloud is already configured. Remove the existing integration before adding another account.",
+      "wechat_not_scanned": "No successful WeChat scan was found before the QR code expired. Try again.",
+      "wechat_qr_failed": "Failed to get the WeChat QR code. Try again later.",
+      "wechat_login_failed": "Failed to complete WeChat login. Try again later.",
       "oauth_failed": "OAuth authentication failed",
       "oauth_missing_uid": "OAuth succeeded, but the token response did not include a Bemfa private key."
     }
