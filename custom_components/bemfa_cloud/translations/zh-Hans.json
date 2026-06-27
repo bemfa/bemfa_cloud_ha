@@ -5,6 +5,7 @@
         "title": "Bemfa Cloud",
         "menu_options": {
           "keys": "手动输入私钥",
+          "wechat_scan": "微信扫码登录",
           "pick_implementation": "使用巴法 OAuth 登录"
         }
       },
@@ -13,13 +14,27 @@
         "data": {
           "uid": "巴法云私钥"
         }
+      },
+      "wechat_scan": {
+        "title": "微信扫码登录",
+        "description": "请使用微信扫描下方二维码。扫码成功后，此页面会自动继续。\n\n![微信扫码登录二维码]({qr_image})"
       }
     },
+    "progress": {
+      "wechat_scan": "请使用微信扫描下方二维码。扫码成功后，此页面会自动继续。\n\n![微信扫码登录二维码]({qr_image})"
+    },
     "error": {
-      "invalid_uid": "非法的巴法云私钥"
+      "invalid_uid": "非法的巴法云私钥",
+      "wechat_not_scanned": "暂未检测到微信扫码成功，请扫码后再次点击提交。",
+      "wechat_qr_failed": "获取微信二维码失败，请稍后重试。",
+      "wechat_login_failed": "微信登录失败，请稍后重试。"
     },
     "abort": {
       "already_configured": "此巴法云账号已经配置",
+      "single_instance_allowed": "巴法云已经配置。如需更换账号，请先删除现有集成后再重新添加。",
+      "wechat_not_scanned": "二维码过期前未检测到微信扫码成功，请重新尝试。",
+      "wechat_qr_failed": "获取微信二维码失败，请稍后重试。",
+      "wechat_login_failed": "微信登录失败，请稍后重试。",
       "oauth_failed": "OAuth 认证失败",
       "oauth_missing_uid": "OAuth 已成功，但 token 响应没有返回巴法云私钥"
     }

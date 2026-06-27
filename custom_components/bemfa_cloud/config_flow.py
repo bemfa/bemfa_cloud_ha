@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import binascii
 import hashlib
 import logging
 import re
@@ -12,6 +15,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2FlowHandler
 from homeassistant.helpers.selector import (
@@ -24,6 +28,7 @@ from homeassistant.helpers.selector import (
 from .const import (
     AUTH_MODE_KEYS,
     AUTH_MODE_OAUTH,
+    AUTH_MODE_WECHAT_SCAN,
     CONF_AUTH_MODE,
     CONF_REGION,
     CONF_UID,
@@ -37,10 +42,18 @@ from .const import (
     OPTIONS_CONFIG,
     OPTIONS_NAME,
     OPTIONS_SELECT,
+    WECHAT_LOGIN_POLL_URL,
+    WECHAT_QR_IMAGE_URL,
+    WECHAT_QR_URL,
 )
 from .sync import Sync
 
 ERROR_CANNOT_SYNC = "cannot_sync"
+ERROR_WECHAT_NOT_SCANNED = "wechat_not_scanned"
+ERROR_WECHAT_QR_FAILED = "wechat_qr_failed"
+ERROR_WECHAT_LOGIN_FAILED = "wechat_login_failed"
+WECHAT_LOGIN_TIMEOUT = 120
+WECHAT_LOGIN_POLL_INTERVAL = 3
 
 STEP_KEYS_SCHEMA = vol.Schema(
     {
@@ -56,6 +69,15 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
 
     VERSION = 1
     DOMAIN = DOMAIN
+
+    def __init__(self) -> None:
+        """Initialize the flow."""
+
+        super().__init__()
+        self._wechat_sid: str | None = None
+        self._wechat_qr_image_url: str | None = None
+        self._wechat_login_task: asyncio.Task[dict[str, Any] | None] | None = None
+        self._wechat_login_data: dict[str, Any] | None = None
 
     @staticmethod
     def async_get_implementations(
@@ -83,9 +105,12 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the initial step."""
 
+        if self._async_current_entries():
+            return self.async_abort(reason="single_instance_allowed")
+
         return self.async_show_menu(
             step_id="user",
-            menu_options=["keys", "pick_implementation"],
+            menu_options=["wechat_scan", "keys", "pick_implementation"],
         )
 
     async def async_step_keys(self, user_input: dict[str, Any] | None = None) -> FlowResult:
@@ -110,6 +135,93 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             errors=errors,
             last_step=True,
         )
+
+    async def async_step_wechat_scan(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle WeChat QR code login."""
+
+        if not self._wechat_sid or not self._wechat_qr_image_url:
+            try:
+                await self._async_prepare_wechat_qr()
+            except Exception as err:  # noqa: BLE001
+                LOGGER.warning("Failed to prepare WeChat login QR code: %s", err)
+                return self.async_abort(reason=ERROR_WECHAT_QR_FAILED)
+
+        if self._wechat_login_task is None:
+            self._wechat_login_task = self.hass.async_create_task(
+                self._async_wait_for_wechat_login()
+            )
+
+        if not self._wechat_login_task.done():
+            return self.async_show_progress(
+                step_id="wechat_scan",
+                progress_action="wechat_scan",
+                description_placeholders={
+                    "qr_image": self._wechat_qr_image_url or "",
+                },
+                progress_task=self._wechat_login_task,
+            )
+
+        try:
+            self._wechat_login_data = await self._wechat_login_task
+        except TimeoutError:
+            self._wechat_login_task = None
+            self._wechat_sid = None
+            self._wechat_qr_image_url = None
+            return self.async_show_progress_done(next_step_id="wechat_timeout")
+        except Exception as err:  # noqa: BLE001
+            LOGGER.warning("Failed to complete WeChat login: %s", err)
+            self._wechat_login_task = None
+            return self.async_show_progress_done(next_step_id="wechat_failed")
+
+        self._wechat_login_task = None
+        if self._wechat_login_data is None:
+            return self.async_show_progress_done(next_step_id="wechat_timeout")
+        return self.async_show_progress_done(next_step_id="wechat_done")
+
+    async def async_step_wechat_done(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Create an entry after WeChat QR code login finishes."""
+
+        if not self._wechat_login_data:
+            return self.async_abort(reason=ERROR_WECHAT_LOGIN_FAILED)
+
+        uid = self._extract_uid_from_wechat_login(self._wechat_login_data)
+        if not uid:
+            return self.async_abort(reason=ERROR_WECHAT_LOGIN_FAILED)
+
+        entry_data = {
+            CONF_UID: uid,
+            CONF_REGION: BEMFA_REGION,
+            CONF_AUTH_MODE: AUTH_MODE_WECHAT_SCAN,
+        }
+        return await self._async_create_bemfa_entry(entry_data)
+
+    async def async_step_wechat_timeout(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle WeChat QR code login timeout."""
+
+        return self.async_abort(reason=ERROR_WECHAT_NOT_SCANNED)
+
+    async def async_step_wechat_failed(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle WeChat QR code login failure."""
+
+        return self.async_abort(reason=ERROR_WECHAT_LOGIN_FAILED)
+
+    async def _async_wait_for_wechat_login(self) -> dict[str, Any] | None:
+        """Poll until WeChat QR code login succeeds or times out."""
+
+        async with asyncio.timeout(WECHAT_LOGIN_TIMEOUT):
+            while True:
+                data = await self._async_poll_wechat_login()
+                if data is not None:
+                    return data
+                await asyncio.sleep(WECHAT_LOGIN_POLL_INTERVAL)
 
     async def async_oauth_create_entry(self, data: dict[str, Any]) -> FlowResult:
         """Create an entry after OAuth finishes."""
@@ -151,6 +263,71 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             if _UID_RE.match(candidate):
                 return candidate
         return None
+
+    @classmethod
+    def _extract_uid_from_wechat_login(cls, data: dict[str, Any]) -> str | None:
+        """Extract the Bemfa private key from WeChat login data."""
+
+        open_id = str(data.get("openID", ""))
+        if len(open_id) <= 6:
+            return None
+
+        # web_v2_user stores openID.substring(1, len - 2) as u_eml.
+        # Other pages then decode u_eml.substring(1, len - 2) with Base64
+        # to get the real Bemfa private key.
+        encoded_uid = open_id[1:-2][1:-2]
+        try:
+            uid = base64.b64decode(
+                encoded_uid + "=" * ((4 - len(encoded_uid) % 4) % 4)
+            ).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError):
+            return None
+
+        return uid if _UID_RE.match(uid) else None
+
+    async def _async_prepare_wechat_qr(self) -> None:
+        """Fetch a WeChat QR code ticket and event key."""
+
+        session = async_get_clientsession(self.hass)
+        async with session.get(WECHAT_QR_URL, timeout=30) as response:
+            data = await response.json(content_type=None)
+
+        if response.status >= 400 or data.get("code") not in (0, None):
+            raise ValueError(f"Unexpected WeChat QR response: {data}")
+
+        payload = data.get("data") if isinstance(data.get("data"), dict) else {}
+        ticket = str(payload.get("url") or "")
+        sid = str(payload.get("sid") or "")
+        if not ticket or not sid:
+            raise ValueError(f"WeChat QR response missing ticket or sid: {data}")
+
+        self._wechat_sid = sid
+        self._wechat_qr_image_url = WECHAT_QR_IMAGE_URL.format(ticket=ticket)
+
+    async def _async_poll_wechat_login(self) -> dict[str, Any] | None:
+        """Poll whether the current WeChat QR code has been scanned."""
+
+        if not self._wechat_sid:
+            return None
+
+        session = async_get_clientsession(self.hass)
+        async with session.post(
+            WECHAT_LOGIN_POLL_URL,
+            json={"eventKey": self._wechat_sid},
+            timeout=30,
+        ) as response:
+            data = await response.json(content_type=None)
+
+        if response.status >= 400:
+            raise ValueError(f"Unexpected WeChat login response: {data}")
+
+        if data.get("code") != 0:
+            return None
+
+        payload = data.get("data") if isinstance(data.get("data"), dict) else None
+        if not payload or payload.get("code") != 0:
+            return None
+        return payload
 
     @staticmethod
     @callback
