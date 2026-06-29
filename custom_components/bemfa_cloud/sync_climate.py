@@ -122,13 +122,24 @@ def _get_detail_value(
     attributes: dict[str, Any], sync_config: dict[str, str], detail_cfg: Any
 ) -> str:
     if has_key(attributes, detail_cfg[ATTR_NAME]):
+        current_value = attributes[detail_cfg[ATTR_NAME]]
         for i in range(len(detail_cfg[CFG_KEYS])):
             key = detail_cfg[CFG_KEYS][i]
-            if (
-                key in sync_config
-                and sync_config[key] == attributes[detail_cfg[ATTR_NAME]]
-            ):
+            if key in sync_config and sync_config[key] == current_value:
                 return detail_cfg[CFG_VALUES][i]
+
+        if detail_cfg[ATTR_OPTIONS_NAME] == ATTR_FAN_MODES:
+            options = attributes.get(detail_cfg[ATTR_OPTIONS_NAME], [])
+            if current_value in options:
+                if str(current_value).lower() in ("auto", "自动"):
+                    return detail_cfg[CFG_VALUES][0]
+                option_index = min(
+                    options.index(current_value) + 1,
+                    len(detail_cfg[CFG_VALUES]) - 1,
+                )
+                return detail_cfg[CFG_VALUES][option_index]
+            if str(current_value).lower() in ("auto", "自动"):
+                return detail_cfg[CFG_VALUES][0]
     return detail_cfg[CFG_VALUES][0]
 
 

@@ -16,7 +16,7 @@ _Sync Home Assistant devices to Bemfa Cloud._
 ## Features
 
 - **Two authentication modes**: Bemfa private key input and OAuth login
-- **Automatic topic creation**: Creates Bemfa TCP V2 topics for supported HA entities
+- **On-demand topic creation**: Creates Bemfa TCP V2 topics for the HA entities you choose to sync
 - **Batch creation**: Uses the batch API when multiple topics need to be created
 - **TCP long connection**: Subscribes to control messages through Bemfa TCP JSON V2
 - **State sync**: Publishes HA state changes back to Bemfa Cloud
@@ -68,13 +68,15 @@ If Bemfa Cloud is not listed in the HACS store yet, or you want to test a develo
 
 ## Configuration
 
+To sync devices to multiple Bemfa Cloud accounts, add multiple Bemfa Cloud hubs. Each hub binds to one account and has its own entity sync configuration.
+
 ### Private Key Mode
 
 1. Go to **Settings** -> **Devices & Services** -> **Add Integration**
 2. Search for **Bemfa Cloud**
 3. Choose **Private Key**
 4. Enter your Bemfa private key `uid`
-5. Save. The integration will discover supported HA entities and create Bemfa topics automatically
+5. Save, then open the Bemfa Cloud configuration page and choose the HA entities to sync
 
 ### OAuth Mode
 
@@ -96,6 +98,7 @@ If OAuth redirects to `homeassistant.local` and the browser cannot open it, conf
 - This integration syncs **HA -> Bemfa Cloud**
 - BeHome syncs **Bemfa Cloud -> HA**
 - Both integrations can be installed together. Bemfa Cloud skips BeHome-created entities to avoid duplicates and control loops
+- The same HA entity can be added to different Bemfa Cloud hubs, and each hub keeps its own sync configuration
 - The integration uses stable Home Assistant entity identifiers when possible. Entities without a stable identifier fall back to `entity_id`, so changing `entity_id` may create a new Bemfa topic
 - After upgrading from an older version, if duplicate devices appear in Bemfa Cloud, remove the old devices manually from the Bemfa console
 
@@ -112,6 +115,10 @@ No. It only stops this integration from syncing that entity. The Bemfa Cloud top
 ### What happens if I change a Home Assistant entity ID?
 
 For entities without a stable identifier, changing `entity_id` may create a new device in Bemfa Cloud.
+
+### How does air conditioner fan speed `v` work?
+
+`v=0` means auto fan, and `v=1` to `v=5` map to fan speeds 1 to 5. Different climate entities may use different fan mode names, so adjust the mapping in "Edit sync settings" when needed.
 
 ## Implementation Notes
 

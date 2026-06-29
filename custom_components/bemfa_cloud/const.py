@@ -71,7 +71,8 @@ TCP_HOST: Final = "tcp-cn-03.bemfa.com"
 TCP_PORT: Final = 8342
 TCP_CONNECT_TIMEOUT: Final = 20
 TCP_RECONNECT_DELAY: Final = 5
-TCP_PING_INTERVAL: Final = 60
+TCP_PING_INTERVAL: Final = 30
+TCP_RESUBSCRIBE_INTERVAL: Final = 5 * 60
 
 BEMFA_TOPIC_TYPE_TCP_V2: Final = 7
 CREATE_TOPIC_URL: Final = "https://pro.bemfa.com/vs/web/v2/createTopicNoSecret"

@@ -148,6 +148,31 @@ class Sync(ABC):
             return {}
         return payload
 
+    def generate_feedback_msg(self, control_msg: Any) -> dict[str, Any]:
+        """Generate a full feedback message after a Bemfa control command."""
+
+        control_payload = self._parse_json_payload(control_msg)
+        suffix = self._get_topic_suffix()
+        payload = self.generate_msg()
+        if control_payload is None:
+            return payload
+
+        if suffix in (TopicSuffix.CLIMATE, TopicSuffix.THERMOSTAT):
+            for key in ("on", "mode", "t", "v"):
+                if key in control_payload:
+                    payload[key] = control_payload[key]
+        return payload
+
+    @staticmethod
+    def _parse_json_payload(msg: Any) -> dict[str, Any] | None:
+        if isinstance(msg, dict):
+            return msg
+        try:
+            payload = json.loads(msg)
+        except (TypeError, ValueError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
     def _generate_msg_payload(self) -> dict[str, Any]:
         """Generate a Bemfa MI JSON message payload."""
 
