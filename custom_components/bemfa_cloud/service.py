@@ -54,7 +54,7 @@ class BemfaCloudService:
     async def _async_restore_syncs(self) -> None:
         syncs = []
         for sync in self.collect_supported_syncs():
-            if sync.topic not in self._config and not sync.should_auto_create():
+            if sync.topic not in self._config:
                 continue
             sync.config = self._config.get(sync.topic, {OPTIONS_NAME: sync.name}).copy()
             sync.name = sync.config.get(OPTIONS_NAME, sync.name)

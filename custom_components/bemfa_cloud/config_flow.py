@@ -78,6 +78,7 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         self._wechat_qr_image_url: str | None = None
         self._wechat_login_task: asyncio.Task[dict[str, Any] | None] | None = None
         self._wechat_login_data: dict[str, Any] | None = None
+        self._pending_entry_data: dict[str, Any] | None = None
 
     @staticmethod
     def async_get_implementations(
@@ -105,9 +106,6 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the initial step."""
 
-        if self._async_current_entries():
-            return self.async_abort(reason="single_instance_allowed")
-
         return self.async_show_menu(
             step_id="user",
             menu_options=["wechat_scan", "keys", "pick_implementation"],
@@ -127,7 +125,7 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                     CONF_REGION: BEMFA_REGION,
                     CONF_AUTH_MODE: AUTH_MODE_KEYS,
                 }
-                return await self._async_create_bemfa_entry(data)
+                return await self._async_show_setup_next(data)
 
         return self.async_show_form(
             step_id="keys",
@@ -197,7 +195,7 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             CONF_REGION: BEMFA_REGION,
             CONF_AUTH_MODE: AUTH_MODE_WECHAT_SCAN,
         }
-        return await self._async_create_bemfa_entry(entry_data)
+        return await self._async_show_setup_next(entry_data)
 
     async def async_step_wechat_timeout(
         self, user_input: dict[str, Any] | None = None
@@ -237,13 +235,38 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             CONF_REGION: BEMFA_REGION,
             CONF_AUTH_MODE: AUTH_MODE_OAUTH,
         }
-        return await self._async_create_bemfa_entry(entry_data)
+        return await self._async_show_setup_next(entry_data)
 
-    async def _async_create_bemfa_entry(self, data: dict[str, Any]) -> FlowResult:
-        uid_md5 = hashlib.md5(data[CONF_UID].encode("utf-8")).hexdigest()
+    async def _async_show_setup_next(self, data: dict[str, Any]) -> FlowResult:
+        """Show the final setup instruction before creating an entry."""
+
+        uid = data[CONF_UID]
+        uid_md5 = hashlib.md5(uid.encode("utf-8")).hexdigest()
         await self.async_set_unique_id(uid_md5)
         self._abort_if_unique_id_configured()
-        return self.async_create_entry(title="Bemfa Cloud", data=data)
+        self._pending_entry_data = data
+        return await self.async_step_setup_next()
+
+    async def async_step_setup_next(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Confirm the next step before creating the entry."""
+
+        if user_input is not None and self._pending_entry_data is not None:
+            return self._async_create_bemfa_entry(self._pending_entry_data)
+
+        return self.async_show_form(
+            step_id="setup_next",
+            data_schema=vol.Schema({}),
+            last_step=True,
+        )
+
+    def _async_create_bemfa_entry(self, data: dict[str, Any]) -> FlowResult:
+        uid = data[CONF_UID]
+        return self.async_create_entry(
+            title=f"Bemfa Cloud ({uid[-6:]})",
+            data=data,
+        )
 
     @classmethod
     def _extract_uid_from_token(cls, token: dict[str, Any]) -> str | None:
@@ -364,19 +387,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Create many syncs at once."""
 
-        service = self._get_service()
         if user_input is not None:
             syncs = [self._sync_dict[entity_id] for entity_id in user_input[OPTIONS_SELECT]]
-            try:
-                await service.async_create_syncs(syncs)
-            except Exception as err:  # noqa: BLE001
-                LOGGER.warning("Failed to create Bemfa syncs: %s", err)
-                return self.async_show_form(
-                    step_id="create_all_syncs",
-                    data_schema=self._create_all_syncs_schema(),
-                    errors={"base": ERROR_CANNOT_SYNC},
-                )
             for sync in syncs:
+                sync.config = {OPTIONS_NAME: sync.name}
                 self._config[sync.topic] = sync.config.copy()
             return self.async_create_entry(title="", data={OPTIONS_CONFIG: self._config})
 
@@ -498,20 +512,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is None:
             return await self._async_step_sync_config()
 
-        service = self._get_service()
-        try:
-            if self._is_create:
-                await service.async_create_sync(self._sync, user_input)
-            else:
-                await service.async_modify_sync(self._sync, user_input)
-        except Exception as err:  # noqa: BLE001
-            LOGGER.warning("Failed to save Bemfa sync for %s: %s", self._sync.entity_id, err)
-            return self.async_show_form(
-                step_id=self._sync.get_config_step_id(),
-                data_schema=vol.Schema(self._sync.generate_details_schema()),
-                errors={"base": ERROR_CANNOT_SYNC},
-            )
-
+        self._sync.name = user_input.get(OPTIONS_NAME, self._sync.name)
+        self._sync.config = user_input.copy()
         self._config[self._sync.topic] = self._sync.config.copy()
         return self.async_create_entry(title="", data={OPTIONS_CONFIG: self._config})
 
@@ -520,10 +522,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     ) -> FlowResult:
         """Destroy local syncs."""
 
-        service = self._get_service()
         if user_input is not None:
             for topic in user_input[OPTIONS_SELECT]:
-                await service.async_destroy_sync(topic)
                 self._config.pop(topic, None)
             return self.async_create_entry(title="", data={OPTIONS_CONFIG: self._config})
 

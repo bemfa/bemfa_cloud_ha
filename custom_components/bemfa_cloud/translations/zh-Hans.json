@@ -11,13 +11,18 @@
       },
       "keys": {
         "title": "巴法云凭据",
+        "description": "请先添加巴法云账号。下一步可以选择要同步到巴法云的 Home Assistant 实体。",
         "data": {
           "uid": "巴法云私钥"
         }
       },
       "wechat_scan": {
         "title": "微信扫码登录",
-        "description": "请使用微信扫描下方二维码。扫码成功后，此页面会自动继续。\n\n![微信扫码登录二维码]({qr_image})"
+        "description": "请使用微信扫描下方二维码。扫码成功后，此页面会自动继续。\n\n下一步可以选择要同步到巴法云的 Home Assistant 实体。\n\n![微信扫码登录二维码]({qr_image})"
+      },
+      "setup_next": {
+        "title": "下一步：同步设备",
+        "description": "巴法云账号已验证。点击 **提交** 完成添加。\n\n然后回到 Bemfa Cloud 卡片，点击 **配置**，选择 **批量添加同步**，勾选要同步的设备。\n\n只有选中的实体才会创建到巴法云。"
       }
     },
     "progress": {
@@ -31,7 +36,6 @@
     },
     "abort": {
       "already_configured": "此巴法云账号已经配置",
-      "single_instance_allowed": "巴法云已经配置。如需更换账号，请先删除现有集成后再重新添加。",
       "wechat_not_scanned": "二维码过期前未检测到微信扫码成功，请重新尝试。",
       "wechat_qr_failed": "获取微信二维码失败，请稍后重试。",
       "wechat_login_failed": "微信登录失败，请稍后重试。",
@@ -55,7 +59,7 @@
       },
       "create_all_syncs": {
         "title": "批量添加同步",
-        "description": "为所选实体批量创建巴法云 TCP V2 主题，并开始同步状态。",
+        "description": "请选择要创建到巴法云的设备。未选中的实体不会同步。",
         "data": {
           "select": "实体"
         }

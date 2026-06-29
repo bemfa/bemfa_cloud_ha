@@ -11,13 +11,18 @@
       },
       "keys": {
         "title": "Bemfa Cloud credentials",
+        "description": "Add the Bemfa Cloud account first. You can choose which Home Assistant entities to sync in the next step.",
         "data": {
           "uid": "Bemfa private key"
         }
       },
       "wechat_scan": {
         "title": "Sign in with WeChat",
-        "description": "Scan this QR code with WeChat. This page will continue automatically after the scan succeeds.\n\n![WeChat QR code]({qr_image})"
+        "description": "Scan this QR code with WeChat. This page will continue automatically after the scan succeeds.\n\nYou can choose which Home Assistant entities to sync in the next step.\n\n![WeChat QR code]({qr_image})"
+      },
+      "setup_next": {
+        "title": "Next: sync your devices",
+        "description": "The Bemfa Cloud account has been verified. Click **Submit** to finish adding it.\n\nThen return to the Bemfa Cloud card, click **Configure**, and choose **Add syncs in bulk** to select the devices you want to sync.\n\nOnly selected entities will be created in Bemfa Cloud."
       }
     },
     "progress": {
@@ -31,7 +36,6 @@
     },
     "abort": {
       "already_configured": "This Bemfa account is already configured",
-      "single_instance_allowed": "Bemfa Cloud is already configured. Remove the existing integration before adding another account.",
       "wechat_not_scanned": "No successful WeChat scan was found before the QR code expired. Try again.",
       "wechat_qr_failed": "Failed to get the WeChat QR code. Try again later.",
       "wechat_login_failed": "Failed to complete WeChat login. Try again later.",
@@ -55,7 +59,7 @@
       },
       "create_all_syncs": {
         "title": "Add syncs in bulk",
-        "description": "Create Bemfa TCP V2 topics for the selected entities and start syncing their states.",
+        "description": "Select the devices you want to create in Bemfa Cloud. Unselected entities will not be synced.",
         "data": {
           "select": "Entities"
         }
