@@ -76,7 +76,7 @@ To sync devices to multiple Bemfa Cloud accounts, add multiple Bemfa Cloud hubs.
 2. Search for **Bemfa Cloud**
 3. Choose **Private Key**
 4. Enter your Bemfa private key `uid`
-5. Save, then open the Bemfa Cloud configuration page and choose the HA entities to sync
+5. Save, then open the Bemfa Cloud configuration page and choose the HA entities to sync. Bulk setup shows main devices such as climate, covers, lights, and switches by default; status and diagnostic entities can still be added with "Add one sync".
 
 ### OAuth Mode
 
@@ -116,9 +116,9 @@ No. It only stops this integration from syncing that entity. The Bemfa Cloud top
 
 For entities without a stable identifier, changing `entity_id` may create a new device in Bemfa Cloud.
 
-### How does air conditioner fan speed `v` work?
+### How does air conditioner fan speed `fan` work?
 
-`v=0` means auto fan, and `v=1` to `v=5` map to fan speeds 1 to 5. Different climate entities may use different fan mode names, so adjust the mapping in "Edit sync settings" when needed.
+`fan=0` means auto fan, `fan=1` to `fan=5` map to fan speeds 1 to 5, and `fan=7/8/9` mean low, medium, and high fan. Different climate entities may use different fan mode names, so adjust the mapping in "Edit sync settings" when needed.
 
 ## Implementation Notes
 

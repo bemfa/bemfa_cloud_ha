@@ -24,6 +24,7 @@ from homeassistant.helpers.selector import (
     SelectSelectorConfig,
     SelectSelectorMode,
 )
+from homeassistant.helpers import entity_registry
 
 from .const import (
     AUTH_MODE_KEYS,
@@ -54,6 +55,28 @@ ERROR_WECHAT_QR_FAILED = "wechat_qr_failed"
 ERROR_WECHAT_LOGIN_FAILED = "wechat_login_failed"
 WECHAT_LOGIN_TIMEOUT = 120
 WECHAT_LOGIN_POLL_INTERVAL = 3
+BATCH_PRIMARY_DOMAINS = {
+    "climate",
+    "cover",
+    "fan",
+    "humidifier",
+    "light",
+    "lock",
+    "media_player",
+    "vacuum",
+    "water_heater",
+}
+BATCH_STANDALONE_DOMAINS = {
+    "automation",
+    "camera",
+    "group",
+    "input_boolean",
+    "remote",
+    "scene",
+    "script",
+    "siren",
+    "switch",
+}
 
 STEP_KEYS_SCHEMA = vol.Schema(
     {
@@ -565,8 +588,33 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         return {
             entity_id: sync
             for entity_id, sync in self._collect_unconfigured_syncs().items()
-            if sync.get_config_step_id() != "sync_config_sensor"
+            if self._is_recommended_batch_sync(sync)
         }
+
+    def _is_recommended_batch_sync(self, sync: Sync) -> bool:
+        """Return whether a sync should appear in the bulk setup list."""
+
+        if sync.get_config_step_id() == "sync_config_sensor":
+            return False
+
+        domain = sync.entity_id.split(".", 1)[0]
+        if domain in BATCH_PRIMARY_DOMAINS:
+            return True
+        if domain not in BATCH_STANDALONE_DOMAINS:
+            return False
+
+        entity_reg = entity_registry.async_get(self.hass)
+        entry = entity_reg.async_get(sync.entity_id)
+        if entry is None or entry.device_id is None:
+            return True
+
+        for device_entry in entity_registry.async_entries_for_device(
+            entity_reg, entry.device_id
+        ):
+            device_domain = device_entry.entity_id.split(".", 1)[0]
+            if device_domain in BATCH_PRIMARY_DOMAINS:
+                return False
+        return True
 
     def _collect_configured_syncs(self) -> dict[str, Sync]:
         result = {}

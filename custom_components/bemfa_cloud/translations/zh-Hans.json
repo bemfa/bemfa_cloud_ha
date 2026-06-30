@@ -59,7 +59,7 @@
       },
       "create_all_syncs": {
         "title": "批量添加同步",
-        "description": "请选择要创建到巴法云的设备。未选中的实体不会同步。",
+        "description": "请选择要创建到巴法云的主设备。状态和诊断类实体已在这里隐藏，如需同步可使用“添加单个同步”。",
         "data": {
           "select": "实体"
         }
@@ -113,6 +113,9 @@
           "fan_speed_3_value": "三档风速",
           "fan_speed_4_value": "四档风速",
           "fan_speed_5_value": "五档风速",
+          "fan_speed_7_value": "低风",
+          "fan_speed_8_value": "中风",
+          "fan_speed_9_value": "高风",
           "swing_off_value": "关闭扫风",
           "swing_horizontal_value": "左右扫风",
           "swing_vertical_value": "上下扫风",

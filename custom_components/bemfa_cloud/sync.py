@@ -24,6 +24,9 @@ from .const import (
     OPTIONS_FAN_SPEED_3_VALUE,
     OPTIONS_FAN_SPEED_4_VALUE,
     OPTIONS_FAN_SPEED_5_VALUE,
+    OPTIONS_FAN_SPEED_7_VALUE,
+    OPTIONS_FAN_SPEED_8_VALUE,
+    OPTIONS_FAN_SPEED_9_VALUE,
     OPTIONS_NAME,
     TOPIC_PREFIX,
     TopicSuffix,
@@ -158,9 +161,11 @@ class Sync(ABC):
             return payload
 
         if suffix in (TopicSuffix.CLIMATE, TopicSuffix.THERMOSTAT):
-            for key in ("on", "mode", "t", "v"):
+            for key in ("on", "mode", "t", "fan"):
                 if key in control_payload:
                     payload[key] = control_payload[key]
+            if "v" in control_payload and "fan" not in control_payload:
+                payload["fan"] = control_payload["v"]
         return payload
 
     @staticmethod
@@ -228,7 +233,7 @@ class Sync(ABC):
                 else:
                     payload["t"] = _to_int(parts[2])
             if suffix != TopicSuffix.WATER_HEATER and len(parts) > 3 and parts[3] != "":
-                payload["v"] = _to_int(parts[3])
+                payload["fan"] = _to_int(parts[3])
             return payload
 
         if suffix == TopicSuffix.SENSOR:
@@ -451,9 +456,10 @@ class ControllableSync(Sync):
                 self._async_call_service(
                     DOMAIN, SERVICE_SET_TEMPERATURE, {ATTR_TEMPERATURE: _to_int(payload["t"])}
                 )
-            if "v" in payload:
+            if "fan" in payload or "v" in payload:
+                fan_value = payload.get("fan", payload.get("v"))
                 fan_mode = _climate_fan_mode(
-                    _to_int(payload["v"]),
+                    _to_int(fan_value),
                     self._config,
                     attributes.get(ATTR_FAN_MODES, []),
                 )
@@ -563,6 +569,10 @@ class ControllableSync(Sync):
                 while len(parts) < 2:
                     parts.append("")
                 parts.append(_to_int(payload["t"]))
+            if "fan" in payload or "v" in payload:
+                while len(parts) < 3:
+                    parts.append("")
+                parts.append(_to_int(payload.get("fan", payload.get("v"))))
         elif suffix == TopicSuffix.WATER_HEATER:
             if "t" in payload:
                 parts.append(_to_int(payload["t"]))
@@ -653,6 +663,9 @@ def _climate_fan_mode(
         3: OPTIONS_FAN_SPEED_3_VALUE,
         4: OPTIONS_FAN_SPEED_4_VALUE,
         5: OPTIONS_FAN_SPEED_5_VALUE,
+        7: OPTIONS_FAN_SPEED_7_VALUE,
+        8: OPTIONS_FAN_SPEED_8_VALUE,
+        9: OPTIONS_FAN_SPEED_9_VALUE,
     }
     key = speed_to_config_key.get(speed)
     if key is None:
@@ -664,6 +677,12 @@ def _climate_fan_mode(
         return None
     if speed == 0:
         return _first_matching_mode(fan_modes, ("auto", "自动"))
+    if speed == 7:
+        return _first_matching_mode(fan_modes, ("low", "低", "低风", "一档"))
+    if speed == 8:
+        return _first_matching_mode(fan_modes, ("medium", "med", "mid", "中", "中风", "二档"))
+    if speed == 9:
+        return _first_matching_mode(fan_modes, ("high", "高", "高风", "三档"))
 
     index = min(speed - 1, len(fan_modes) - 1)
     return fan_modes[index]

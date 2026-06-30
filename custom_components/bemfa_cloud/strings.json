@@ -67,7 +67,7 @@
       },
       "create_all_syncs": {
         "title": "Add syncs in bulk",
-        "description": "Select the devices you want to create in Bemfa Cloud. Unselected entities will not be synced.",
+        "description": "Select the main devices you want to create in Bemfa Cloud. Status and diagnostic entities are hidden here; use Add one sync if you need them.",
         "data": {
           "select": "Entities"
         }
@@ -121,6 +121,9 @@
           "fan_speed_3_value": "Fan speed 3",
           "fan_speed_4_value": "Fan speed 4",
           "fan_speed_5_value": "Fan speed 5",
+          "fan_speed_7_value": "Low fan",
+          "fan_speed_8_value": "Medium fan",
+          "fan_speed_9_value": "High fan",
           "swing_off_value": "Swing off",
           "swing_horizontal_value": "Horizontal swing",
           "swing_vertical_value": "Vertical swing",
