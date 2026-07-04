@@ -97,12 +97,7 @@
       "sync_config_sensor": {
         "title": "Configure sensor",
         "data": {
-          "name": "Name",
-          "temperature": "Temperature sensor",
-          "humidity": "Humidity sensor",
-          "illuminance": "Illuminance sensor",
-          "pm25": "PM2.5 sensor",
-          "co2": "CO2 sensor"
+          "name": "Name"
         }
       },
       "sync_config_binary_sensor": {

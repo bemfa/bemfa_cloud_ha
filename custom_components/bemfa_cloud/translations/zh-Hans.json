@@ -89,12 +89,7 @@
       "sync_config_sensor": {
         "title": "配置传感器",
         "data": {
-          "name": "名称",
-          "temperature": "温度传感器",
-          "humidity": "湿度传感器",
-          "illuminance": "光照传感器",
-          "pm25": "PM2.5 传感器",
-          "co2": "CO2 传感器"
+          "name": "名称"
         }
       },
       "sync_config_binary_sensor": {
