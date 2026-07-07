@@ -36,10 +36,6 @@ from .const import (
     BEMFA_REGION,
     DOMAIN,
     LOGGER,
-    OAUTH_AUTHORIZE_URL,
-    OAUTH_CLIENT_ID,
-    OAUTH_CLIENT_SECRET,
-    OAUTH_TOKEN_URL,
     OPTIONS_CONFIG,
     OPTIONS_NAME,
     OPTIONS_SELECT,
@@ -102,23 +98,6 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         self._wechat_login_task: asyncio.Task[dict[str, Any] | None] | None = None
         self._wechat_login_data: dict[str, Any] | None = None
         self._pending_entry_data: dict[str, Any] | None = None
-
-    @staticmethod
-    def async_get_implementations(
-        hass: HomeAssistant,
-    ) -> list[config_entry_oauth2_flow.AbstractOAuth2Implementation]:
-        """Return OAuth2 implementations."""
-
-        return [
-            config_entry_oauth2_flow.LocalOAuth2Implementation(
-                hass,
-                DOMAIN,
-                OAUTH_CLIENT_ID,
-                OAUTH_CLIENT_SECRET,
-                OAUTH_AUTHORIZE_URL,
-                OAUTH_TOKEN_URL,
-            )
-        ]
 
     @property
     def logger(self) -> logging.Logger:
