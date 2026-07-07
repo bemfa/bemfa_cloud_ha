@@ -110,7 +110,7 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
 
         return self.async_show_menu(
             step_id="user",
-            menu_options=["wechat_scan", "keys", "pick_implementation"],
+            menu_options=["wechat_scan", "keys"],
         )
 
     async def async_step_keys(self, user_input: dict[str, Any] | None = None) -> FlowResult:

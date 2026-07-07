@@ -5,8 +5,7 @@
         "title": "Bemfa Cloud",
         "menu_options": {
           "keys": "Enter keys manually",
-          "wechat_scan": "Sign in with WeChat QR code",
-          "pick_implementation": "Sign in with Bemfa OAuth"
+          "wechat_scan": "Sign in with WeChat QR code"
         }
       },
       "keys": {
