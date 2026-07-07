@@ -5,7 +5,8 @@
         "title": "Bemfa Cloud",
         "menu_options": {
           "keys": "手动输入私钥",
-          "wechat_scan": "微信扫码登录"
+          "wechat_scan": "微信扫码登录",
+          "pick_implementation": "使用巴法 OAuth 登录"
         }
       },
       "keys": {
