@@ -8,8 +8,16 @@ from homeassistant.helpers import config_entry_oauth2_flow
 
 from .const import (
     OAUTH_AUTHORIZE_URL,
+    OAUTH_CLIENT_ID,
+    OAUTH_CLIENT_SECRET,
     OAUTH_TOKEN_URL,
 )
+
+
+async def async_get_default_credentials(hass: HomeAssistant) -> ClientCredential:
+    """Return default credentials for Bemfa Cloud OAuth."""
+
+    return ClientCredential(OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET)
 
 
 async def async_get_auth_implementation(
