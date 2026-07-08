@@ -5,7 +5,11 @@ from collections.abc import Mapping, Callable
 from typing import Any
 from homeassistant.components.automation import DOMAIN as AUTOMATION_DOMAIN
 from homeassistant.components.camera import DOMAIN as CAMERA_DOMAIN
-from homeassistant.components.camera.const import CameraState
+try:
+    from homeassistant.components.camera.const import CameraState
+    _CAMERA_STATE_IDLE = CameraState.IDLE
+except ImportError:
+    _CAMERA_STATE_IDLE = "idle"
 from homeassistant.components.group import DOMAIN as GROUP_DOMAIN
 from homeassistant.components.humidifier import DOMAIN as HUMIDIFIER_DOMAIN
 from homeassistant.components.input_boolean import DOMAIN as INPUT_BOOLEAN_DOMAIN
@@ -31,8 +35,12 @@ from homeassistant.components.vacuum import (
     SERVICE_START,
     SERVICE_STOP,
     VacuumEntityFeature,
-    VacuumActivity,
 )
+try:
+    from homeassistant.components.vacuum import VacuumActivity
+    _VACUUM_CLEANING = VacuumActivity.CLEANING
+except ImportError:
+    _VACUUM_CLEANING = "cleaning"
 from homeassistant.const import (
     ATTR_DEVICE_CLASS,
     ATTR_SUPPORTED_FEATURES,
@@ -142,7 +150,7 @@ class Camera(Switch):
     def _msg_generator(
         self,
     ) -> Callable[[str, ReadOnlyDict[Mapping[str, Any]]], str | int]:
-        return lambda state, attributes: MSG_OFF if state == CameraState.IDLE else MSG_ON
+        return lambda state, attributes: MSG_OFF if state == _CAMERA_STATE_IDLE else MSG_ON
 
 
 @SYNC_TYPES.register("outlet")
@@ -263,7 +271,7 @@ class Vacuum(Switch):
     ) -> Callable[[str, ReadOnlyDict[Mapping[str, Any]]], str | int]:
         return (
             lambda state, attributes: MSG_ON
-            if state in [STATE_ON, VacuumActivity.CLEANING]
+            if state in [STATE_ON, _VACUUM_CLEANING]
             else MSG_OFF
         )
 
