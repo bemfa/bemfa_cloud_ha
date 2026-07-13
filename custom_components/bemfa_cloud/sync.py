@@ -28,12 +28,24 @@ from .const import (
     OPTIONS_FAN_SPEED_8_VALUE,
     OPTIONS_FAN_SPEED_9_VALUE,
     OPTIONS_NAME,
+    OPTIONS_SWING_BOTH_VALUE,
+    OPTIONS_SWING_HORIZONTAL_VALUE,
+    OPTIONS_SWING_OFF_VALUE,
+    OPTIONS_SWING_VERTICAL_VALUE,
     TOPIC_PREFIX,
     TopicSuffix,
 )
 
 _LOGGING = logging.getLogger(__name__)
 UNPUBLISHABLE_STATES = {STATE_UNAVAILABLE, STATE_UNKNOWN}
+
+CLIMATE_SWING_CONFIG_KEYS = [
+    OPTIONS_SWING_OFF_VALUE,
+    OPTIONS_SWING_HORIZONTAL_VALUE,
+    OPTIONS_SWING_VERTICAL_VALUE,
+    OPTIONS_SWING_BOTH_VALUE,
+]
+CLIMATE_SWING_VALUES = ["0#0", "1#0", "0#1", "1#1"]
 
 
 class Sync(ABC):
@@ -161,7 +173,7 @@ class Sync(ABC):
             return payload
 
         if suffix in (TopicSuffix.CLIMATE, TopicSuffix.THERMOSTAT):
-            for key in ("on", "mode", "t", "fan"):
+            for key in ("on", "mode", "t", "fan", "l2r", "u2d"):
                 if key in control_payload:
                     payload[key] = control_payload[key]
             if "v" in control_payload and "fan" not in control_payload:
@@ -234,6 +246,13 @@ class Sync(ABC):
                     payload["t"] = _to_int(parts[2])
             if suffix != TopicSuffix.WATER_HEATER and len(parts) > 3 and parts[3] != "":
                 payload["fan"] = _to_int(parts[3])
+            if suffix in (TopicSuffix.CLIMATE, TopicSuffix.THERMOSTAT):
+                if len(parts) > 4 and parts[4] != "":
+                    swing_parts = str(parts[4]).split(MSG_SEPARATOR)
+                    if len(swing_parts) > 0:
+                        payload["l2r"] = _swing_axis_payload_value(swing_parts[0])
+                    if len(swing_parts) > 1:
+                        payload["u2d"] = _swing_axis_payload_value(swing_parts[1])
             return payload
 
         if suffix == TopicSuffix.SENSOR:
@@ -422,10 +441,12 @@ class ControllableSync(Sync):
                 ATTR_FAN_MODES,
                 ATTR_HVAC_MODE,
                 ATTR_PRESET_MODES,
+                ATTR_SWING_MODE,
                 DOMAIN,
                 SERVICE_SET_FAN_MODE,
                 SERVICE_SET_HVAC_MODE,
                 SERVICE_SET_PRESET_MODE,
+                SERVICE_SET_SWING_MODE,
                 SERVICE_SET_TEMPERATURE,
             )
             from homeassistant.const import ATTR_TEMPERATURE, SERVICE_TURN_OFF, SERVICE_TURN_ON
@@ -468,6 +489,34 @@ class ControllableSync(Sync):
                         DOMAIN,
                         SERVICE_SET_FAN_MODE,
                         {"fan_mode": fan_mode},
+                    )
+            if "l2r" in payload or "u2d" in payload:
+                current_l2r, current_u2d = _climate_current_swing_axes(
+                    self._config, attributes.get(ATTR_SWING_MODE)
+                )
+                swing_value = MSG_SEPARATOR.join(
+                    [
+                        str(
+                            _payload_swing_axis_value(payload["l2r"])
+                            if "l2r" in payload
+                            else current_l2r
+                        ),
+                        str(
+                            _payload_swing_axis_value(payload["u2d"])
+                            if "u2d" in payload
+                            else current_u2d
+                        ),
+                    ]
+                )
+                swing_mode = _climate_config_value(
+                    self._config,
+                    CLIMATE_SWING_CONFIG_KEYS,
+                    swing_value,
+                    CLIMATE_SWING_VALUES,
+                )
+                if swing_mode is not None:
+                    self._async_call_service(
+                        DOMAIN, SERVICE_SET_SWING_MODE, {ATTR_SWING_MODE: swing_mode}
                     )
             return True
 
@@ -573,6 +622,12 @@ class ControllableSync(Sync):
                 while len(parts) < 3:
                     parts.append("")
                 parts.append(_to_int(payload.get("fan", payload.get("v"))))
+            if "l2r" in payload or "u2d" in payload:
+                while len(parts) < 4:
+                    parts.append("")
+                l2r = _payload_swing_axis_value(payload.get("l2r", 0))
+                u2d = _payload_swing_axis_value(payload.get("u2d", 0))
+                parts.extend([l2r, u2d])
         elif suffix == TopicSuffix.WATER_HEATER:
             if "t" in payload:
                 parts.append(_to_int(payload["t"]))
@@ -612,6 +667,42 @@ def _to_int(value: Any) -> int:
     if isinstance(value, float):
         return round(value)
     return int(str(value))
+
+
+def _swing_axis_payload_value(value: Any) -> int:
+    return 360 if _to_int(value) != 0 else 0
+
+
+def _payload_swing_axis_value(value: Any) -> int:
+    return 1 if _to_int(value) != 0 else 0
+
+
+def _climate_config_value(
+    config: dict[str, str],
+    keys: list[str],
+    value: Any,
+    values: list[Any] | None = None,
+) -> str | None:
+    values = list(range(len(keys))) if values is None else values
+    if value not in values:
+        return None
+
+    key = keys[values.index(value)]
+    return config.get(key)
+
+
+def _climate_current_swing_axes(
+    config: dict[str, str], current_swing_mode: Any
+) -> tuple[int, int]:
+    if current_swing_mode is None:
+        return (0, 0)
+
+    for key, value in zip(CLIMATE_SWING_CONFIG_KEYS, CLIMATE_SWING_VALUES):
+        if config.get(key) == current_swing_mode:
+            l2r, u2d = value.split(MSG_SEPARATOR)
+            return (_to_int(l2r), _to_int(u2d))
+
+    return (0, 0)
 
 
 def _coerce_msg_value(value: Any) -> str | int:
