@@ -438,11 +438,14 @@ class ControllableSync(Sync):
 
         if suffix in (TopicSuffix.CLIMATE, TopicSuffix.THERMOSTAT):
             from homeassistant.components.climate import (
+                ATTR_FAN_MODE,
                 ATTR_FAN_MODES,
                 ATTR_HVAC_MODE,
+                ATTR_PRESET_MODE,
                 ATTR_PRESET_MODES,
                 ATTR_SWING_MODE,
                 DOMAIN,
+                HVACMode,
                 SERVICE_SET_FAN_MODE,
                 SERVICE_SET_HVAC_MODE,
                 SERVICE_SET_PRESET_MODE,
@@ -454,29 +457,31 @@ class ControllableSync(Sync):
             if payload.get("on", True) is False:
                 self._async_call_service(DOMAIN, SERVICE_TURN_OFF, {})
                 return True
-            if payload.get("on") is True:
-                self._async_call_service(DOMAIN, SERVICE_TURN_ON, {})
+
+            calls: list[tuple[str, str, dict[str, Any]]] = []
+            current_state = self._hass.states.get(self._entity_id)
+            current_hvac = current_state.state if current_state else None
+
             if "mode" in payload:
                 mode = _to_int(payload["mode"])
                 hvac_mode = _climate_hvac_mode(mode)
                 if hvac_mode is not None:
-                    self._async_call_service(
-                        DOMAIN,
-                        SERVICE_SET_HVAC_MODE,
-                        {ATTR_HVAC_MODE: hvac_mode},
-                    )
+                    if current_hvac != hvac_mode:
+                        calls.append((DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_HVAC_MODE: hvac_mode}))
                 elif preset_mode := _climate_preset_mode(
                     mode, attributes.get(ATTR_PRESET_MODES, [])
                 ):
-                    self._async_call_service(
-                        DOMAIN,
-                        SERVICE_SET_PRESET_MODE,
-                        {"preset_mode": preset_mode},
-                    )
+                    if attributes.get(ATTR_PRESET_MODE) != preset_mode:
+                        calls.append((DOMAIN, SERVICE_SET_PRESET_MODE, {"preset_mode": preset_mode}))
+            elif payload.get("on") is True:
+                if current_hvac == HVACMode.OFF:
+                    calls.append((DOMAIN, SERVICE_TURN_ON, {}))
+
             if "t" in payload:
-                self._async_call_service(
-                    DOMAIN, SERVICE_SET_TEMPERATURE, {ATTR_TEMPERATURE: _to_int(payload["t"])}
-                )
+                target_temp = _to_int(payload["t"])
+                if attributes.get(ATTR_TEMPERATURE) != target_temp:
+                    calls.append((DOMAIN, SERVICE_SET_TEMPERATURE, {ATTR_TEMPERATURE: target_temp}))
+
             if "fan" in payload or "v" in payload:
                 fan_value = payload.get("fan", payload.get("v"))
                 fan_mode = _climate_fan_mode(
@@ -484,12 +489,9 @@ class ControllableSync(Sync):
                     self._config,
                     attributes.get(ATTR_FAN_MODES, []),
                 )
-                if fan_mode is not None:
-                    self._async_call_service(
-                        DOMAIN,
-                        SERVICE_SET_FAN_MODE,
-                        {"fan_mode": fan_mode},
-                    )
+                if fan_mode is not None and attributes.get(ATTR_FAN_MODE) != fan_mode:
+                    calls.append((DOMAIN, SERVICE_SET_FAN_MODE, {"fan_mode": fan_mode}))
+
             if "l2r" in payload or "u2d" in payload:
                 current_l2r, current_u2d = _climate_current_swing_axes(
                     self._config, attributes.get(ATTR_SWING_MODE)
@@ -515,9 +517,10 @@ class ControllableSync(Sync):
                     CLIMATE_SWING_VALUES,
                 )
                 if swing_mode is not None:
-                    self._async_call_service(
-                        DOMAIN, SERVICE_SET_SWING_MODE, {ATTR_SWING_MODE: swing_mode}
-                    )
+                    calls.append((DOMAIN, SERVICE_SET_SWING_MODE, {ATTR_SWING_MODE: swing_mode}))
+
+            if calls:
+                self._async_call_services_sequential(calls)
             return True
 
         if suffix == TopicSuffix.WATER_HEATER:
@@ -527,21 +530,30 @@ class ControllableSync(Sync):
                 SERVICE_SET_OPERATION_MODE,
                 SERVICE_SET_TEMPERATURE,
             )
-            from homeassistant.const import ATTR_TEMPERATURE, SERVICE_TURN_OFF, SERVICE_TURN_ON
+            from homeassistant.const import ATTR_TEMPERATURE, SERVICE_TURN_OFF, SERVICE_TURN_ON, STATE_OFF
 
             if payload.get("on", True) is False:
                 self._async_call_service(DOMAIN, SERVICE_TURN_OFF, {})
                 return True
+
+            calls: list[tuple[str, str, dict[str, Any]]] = []
+            current_state = self._hass.states.get(self._entity_id)
+            current_state_val = current_state.state if current_state else None
+
             if "on" in payload and len(payload) == 1:
-                self._async_call_service(DOMAIN, SERVICE_TURN_ON, {})
+                if current_state_val == STATE_OFF:
+                    calls.append((DOMAIN, SERVICE_TURN_ON, {}))
             if "t" in payload:
-                self._async_call_service(
-                    DOMAIN, SERVICE_SET_TEMPERATURE, {ATTR_TEMPERATURE: _to_int(payload["t"])}
-                )
+                target_temp = _to_int(payload["t"])
+                if attributes.get(ATTR_TEMPERATURE) != target_temp:
+                    calls.append((DOMAIN, SERVICE_SET_TEMPERATURE, {ATTR_TEMPERATURE: target_temp}))
             if "mode" in payload:
-                self._async_call_service(
-                    DOMAIN, SERVICE_SET_OPERATION_MODE, {ATTR_OPERATION_MODE: str(payload["mode"])}
-                )
+                target_mode = str(payload["mode"])
+                if attributes.get(ATTR_OPERATION_MODE) != target_mode:
+                    calls.append((DOMAIN, SERVICE_SET_OPERATION_MODE, {ATTR_OPERATION_MODE: target_mode}))
+
+            if calls:
+                self._async_call_services_sequential(calls)
             return True
 
         if suffix == TopicSuffix.AIR_PURIFIER:
@@ -576,6 +588,21 @@ class ControllableSync(Sync):
                 blocking=False,
             )
         )
+
+    def _async_call_services_sequential(
+        self, calls: list[tuple[str, str, dict[str, Any]]]
+    ) -> None:
+        """Execute a list of (domain, service, data) calls sequentially in order."""
+        async def _run() -> None:
+            for domain, service, data in calls:
+                data[ATTR_ENTITY_ID] = self._entity_id
+                await self._hass.services.async_call(
+                    domain=domain,
+                    service=service,
+                    service_data=data,
+                    blocking=True,
+                )
+        self._hass.async_create_task(_run())
 
     def _msg_to_parts(
         self, msg: Any, attributes: ReadOnlyDict[Mapping[str, Any]]

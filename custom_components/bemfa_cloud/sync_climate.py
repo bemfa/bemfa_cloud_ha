@@ -313,6 +313,8 @@ class Climate(ControllableSync):
             return DOMAIN, SERVICE_SET_HVAC_MODE, {ATTR_HVAC_MODE: hvac_mode}
         if preset_mode := _climate_preset_mode(mode, attributes.get(ATTR_PRESET_MODES, [])):
             return DOMAIN, SERVICE_SET_PRESET_MODE, {"preset_mode": preset_mode}
+        # Unknown mode value — just power on without changing mode to avoid re-triggering
+        # state sync loops caused by an unrecognised mode resetting the AC state.
         return DOMAIN, SERVICE_TURN_ON, {}
 
     def _resolve_fan_mode(
