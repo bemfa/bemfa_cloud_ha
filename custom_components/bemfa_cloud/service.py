@@ -81,6 +81,12 @@ class BemfaCloudService:
         syncs.extend(self._collect_fallback_switch_syncs(covered_entity_ids))
         return sorted(syncs, key=lambda item: item.entity_id)
 
+    # HA-internal domains that support turn_on/turn_off but are not physical
+    # devices and should never be mirrored to Bemfa as switch entities.
+    _FALLBACK_EXCLUDED_DOMAINS: frozenset[str] = frozenset(
+        {"automation", "script", "scene", "group"}
+    )
+
     def _collect_fallback_switch_syncs(self, covered_entity_ids: set[str]) -> list[Sync]:
         """Map unrecognized turnable entities to Bemfa switch devices."""
 
@@ -95,6 +101,8 @@ class BemfaCloudService:
                     continue
 
                 domain = state.entity_id.split(".", 1)[0]
+                if domain in self._FALLBACK_EXCLUDED_DOMAINS:
+                    continue
                 if not (
                     self._hass.services.has_service(domain, SERVICE_TURN_ON)
                     and self._hass.services.has_service(domain, SERVICE_TURN_OFF)
