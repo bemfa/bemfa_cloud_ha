@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, SERVICE_TURN_OFF, SERVICE_TURN_ON
-from homeassistant.core import CALLBACK_TYPE, CoreState, Event, HomeAssistant
+from homeassistant.const import SERVICE_TURN_OFF, SERVICE_TURN_ON
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant
 from homeassistant.helpers import area_registry, device_registry, entity_registry
+from homeassistant.helpers.start import async_at_started
 
 from .const import EXCLUDED_SOURCE_PLATFORMS, LOGGER, OPTIONS_NAME
 from .http import BemfaCloudHttp, TopicPayload
@@ -31,15 +32,16 @@ class BemfaCloudService:
         self._config = config
         await self._tcp.async_start()
 
-        async def _start(event: Event | None = None) -> None:
+        async def _start(hass: HomeAssistant) -> None:
             await self._async_restore_syncs()
 
-        if self._hass.state == CoreState.running:
-            self._hass.async_create_background_task(
-                self._async_restore_syncs(), "bemfa_cloud_restore_syncs"
-            )
-        else:
-            self._hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _start)
+        # Always wait for HA to be fully started before restoring syncs.
+        # The entity registry may not be fully loaded yet if this integration
+        # starts (or reloads) while HA is still starting up, which previously
+        # caused Sync.topic hashes to be computed inconsistently across
+        # restarts (e.g. falling back to entity_id instead of unique_id),
+        # creating duplicate topics on the Bemfa side for the same entity.
+        async_at_started(self._hass, _start)
 
         self._start_registry_listeners()
 
