@@ -57,21 +57,23 @@ class BemfaCloudHttp:
         self._uid = credentials[CONF_UID]
         self._region = BEMFA_REGION
 
-    async def async_create_topics(self, topics: list[TopicPayload]) -> None:
+    async def async_create_topics(self, topics: list[TopicPayload]) -> dict[str, str]:
         """Create one or more TCP V2 topics.
 
         The Bemfa API supports up to 99 topics per batch.
         """
 
         if not topics:
-            return
+            return {}
 
         if len(topics) == 1:
             await self._async_create_topic(topics[0])
-            return
+            return {}
 
+        failures: dict[str, str] = {}
         for index in range(0, len(topics), 99):
-            await self._async_add_topics(topics[index : index + 99])
+            failures.update(await self._async_add_topics(topics[index : index + 99]))
+        return failures
 
     async def _async_create_topic(self, topic: TopicPayload) -> None:
         payload = {
@@ -81,7 +83,7 @@ class BemfaCloudHttp:
         }
         await self._post(CREATE_TOPIC_URL, payload)
 
-    async def _async_add_topics(self, topics: list[TopicPayload]) -> None:
+    async def _async_add_topics(self, topics: list[TopicPayload]) -> dict[str, str]:
         payload = {
             "uid": self._uid,
             "topics": [topic.as_api_item() for topic in topics],
@@ -102,8 +104,36 @@ class BemfaCloudHttp:
         result = data.get("data") if isinstance(data.get("data"), dict) else {}
         if exists := result.get("exists"):
             LOGGER.debug("Bemfa topics already exist: %s", exists)
-        if failed := result.get("failed"):
-            LOGGER.warning("Bemfa failed to create topics: %s", failed)
+
+        failures: dict[str, str] = {}
+        for failure in result.get("failed") or []:
+            if isinstance(failure, str):
+                failures[failure] = "topic creation failed"
+                continue
+            if not isinstance(failure, dict):
+                continue
+            topic = failure.get("topic")
+            if not isinstance(topic, str) or not topic:
+                continue
+            reason = failure.get("reason") or "topic creation failed"
+            code = failure.get("code")
+            failures[topic] = f"{reason} (code={code})" if code is not None else str(reason)
+
+        # ``failed`` remains a string list for old clients. New clients use
+        # ``failed_detail`` for the structured reason and code.
+        for failure in result.get("failed_detail") or []:
+            if not isinstance(failure, dict):
+                continue
+            topic = failure.get("topic")
+            if not isinstance(topic, str) or not topic:
+                continue
+            reason = failure.get("reason") or "topic creation failed"
+            code = failure.get("code")
+            failures[topic] = f"{reason} (code={code})" if code is not None else str(reason)
+
+        if failures:
+            LOGGER.warning("Bemfa failed to create topics: %s", failures)
+        return failures
 
     async def async_modify_name(self, topic: str, name: str) -> None:
         """Update a Bemfa topic display name."""
