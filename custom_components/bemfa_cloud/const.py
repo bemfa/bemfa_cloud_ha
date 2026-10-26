@@ -25,7 +25,9 @@ OAUTH_CLIENT_SECRET: Final = ""
 OAUTH_AUTHORIZE_URL: Final = "https://cloud.bemfa.com/web/mi/index.html"
 OAUTH_TOKEN_URL: Final = "https://pro.bemfa.com/vs/speaker/v1/v2SpeakerToken"
 WECHAT_QR_URL: Final = "https://go.bemfa.com/v3/getwximg?key=bemfa&q=2"
-WECHAT_QR_IMAGE_URL: Final = "https://mp.weixin.qq.com/cgi-bin/showqrcode?ticket={ticket}"
+WECHAT_QR_IMAGE_URL: Final = (
+    "https://mp.weixin.qq.com/cgi-bin/showqrcode?ticket={ticket}"
+)
 WECHAT_LOGIN_POLL_URL: Final = "https://go.bemfa.com/vb/web/v2/wechatLoginByEventKey"
 
 OPTIONS_CONFIG: Final = "config"
@@ -71,8 +73,9 @@ class TopicSuffix(StrEnum):
 
 
 TCP_HOST: Final = "tcp-cn-03.bemfa.com"
-TCP_PORT: Final = 8342
+TCP_PORT: Final = 8343
 TCP_CONNECT_TIMEOUT: Final = 20
+TCP_TLS_SHUTDOWN_TIMEOUT: Final = 5
 TCP_RECONNECT_DELAY: Final = 5
 TCP_PING_INTERVAL: Final = 30
 TCP_RESUBSCRIBE_INTERVAL: Final = 5 * 60
