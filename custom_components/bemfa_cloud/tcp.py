@@ -10,7 +10,6 @@ from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant
 
 from .const import (
-    CONF_UID,
     LOGGER,
     TCP_CONNECT_TIMEOUT,
     TCP_HOST,
@@ -20,6 +19,10 @@ from .const import (
     TCP_RESUBSCRIBE_INTERVAL,
 )
 from .sync import Sync
+
+STATE_PUBLISH_DELAY = 0.2
+CONTROL_FEEDBACK_DELAY = 1.0
+MAX_PUBLISH_DELAY = 2.0
 
 
 class BemfaCloudTcp:
@@ -34,8 +37,13 @@ class BemfaCloudTcp:
         self._writer: asyncio.StreamWriter | None = None
         self._runner: asyncio.Task[None] | None = None
         self._remove_listener: CALLBACK_TYPE | None = None
-        self._feedback_suppressed_until: dict[str, float] = {}
+        self._publish_tasks: dict[str, asyncio.Task[None]] = {}
+        self._publish_deadlines: dict[str, float] = {}
+        self._publish_max_deadlines: dict[str, float] = {}
+        self._last_published: dict[str, str] = {}
+        self._publish_lock = asyncio.Lock()
         self._stopped = asyncio.Event()
+        self._stopped.set()
 
     async def async_start(self) -> None:
         """Start connection management."""
@@ -58,13 +66,21 @@ class BemfaCloudTcp:
         if self._remove_listener is not None:
             self._remove_listener()
             self._remove_listener = None
+        tasks = list(self._publish_tasks.values())
         if self._runner is not None:
-            self._runner.cancel()
-            try:
-                await self._runner
-            except asyncio.CancelledError:
-                pass
-            self._runner = None
+            tasks.append(self._runner)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(
+            *tasks,
+            *(sync.async_stop() for sync in self._topic_to_sync.values()),
+            return_exceptions=True,
+        )
+        self._runner = None
+        self._publish_tasks.clear()
+        self._publish_deadlines.clear()
+        self._publish_max_deadlines.clear()
+        self._topic_to_sync.clear()
         await self._close_writer()
 
     async def async_add_sync(self, sync: Sync) -> None:
@@ -75,8 +91,15 @@ class BemfaCloudTcp:
     async def async_add_syncs(self, syncs: list[Sync]) -> None:
         """Add syncs, subscribe their topics in one TCP command, and publish state."""
 
+        if self._stopped.is_set():
+            return
         topics: list[str] = []
         for sync in syncs:
+            old_sync = self._topic_to_sync.get(sync.topic)
+            if old_sync is not None and old_sync is not sync:
+                await old_sync.async_stop()
+            if self._stopped.is_set():
+                return
             self._topic_to_sync[sync.topic] = sync
             topics.append(sync.topic)
 
@@ -92,30 +115,58 @@ class BemfaCloudTcp:
     async def async_update_sync(self, sync: Sync) -> None:
         """Update a sync."""
 
-        self._topic_to_sync[sync.topic] = sync
-        await self.async_publish_sync(sync)
+        if self._stopped.is_set():
+            return
+        await self.async_add_sync(sync)
 
     async def async_remove_sync(self, topic: str) -> None:
         """Remove a sync locally."""
 
-        self._topic_to_sync.pop(topic, None)
+        sync = self._topic_to_sync.pop(topic, None)
+        task = self._publish_tasks.pop(topic, None)
+        self._publish_deadlines.pop(topic, None)
+        self._publish_max_deadlines.pop(topic, None)
+        self._last_published.pop(topic, None)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if sync is not None:
+            await sync.async_stop()
         await self._close_writer()
 
     async def async_publish_sync(self, sync: Sync) -> None:
         """Publish the current Home Assistant state for a sync."""
 
-        msg = sync.generate_msg()
-        if not msg:
-            return
-        await self._send(
-            {
-                "cmd": 2,
-                "uid": self._uid,
-                "topics": [sync.topic],
-                "msg": msg,
-                "mode": 3,
-            }
-        )
+        # Serialize comparison and writing so concurrent publishers cannot both
+        # send the same state before either has updated the cache.
+        async with self._publish_lock:
+            if (
+                self._stopped.is_set()
+                or self._topic_to_sync.get(sync.topic) is not sync
+            ):
+                return
+            msg = sync.generate_msg()
+            if not msg:
+                return
+            content = json.dumps(
+                msg, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            if self._last_published.get(sync.topic) == content:
+                return
+            writer = self._writer
+            if (
+                await self._send(
+                    {
+                        "cmd": 2,
+                        "uid": self._uid,
+                        "topics": [sync.topic],
+                        "msg": msg,
+                        "mode": 3,
+                    }
+                )
+                and self._writer is writer
+            ):
+                self._last_published[sync.topic] = content
 
     async def _run(self) -> None:
         while not self._stopped.is_set():
@@ -125,6 +176,7 @@ class BemfaCloudTcp:
                     timeout=TCP_CONNECT_TIMEOUT,
                 )
                 self._writer = writer
+                self._last_published.clear()
                 await self._subscribe(list(self._topic_to_sync))
                 await self._publish_all()
                 await self._read_loop(reader)
@@ -136,7 +188,9 @@ class BemfaCloudTcp:
                 await self._close_writer()
 
             try:
-                await asyncio.wait_for(self._stopped.wait(), timeout=TCP_RECONNECT_DELAY)
+                await asyncio.wait_for(
+                    self._stopped.wait(), timeout=TCP_RECONNECT_DELAY
+                )
             except TimeoutError:
                 continue
 
@@ -176,6 +230,8 @@ class BemfaCloudTcp:
             self._handle_payload(payload)
 
     def _handle_payload(self, payload: dict[str, Any]) -> None:
+        if self._stopped.is_set():
+            return
         topics = payload.get("topics") or []
         if not topics:
             return
@@ -184,53 +240,68 @@ class BemfaCloudTcp:
         if sync is None or "msg" not in payload:
             return
         msg = payload["msg"]
-        LOGGER.debug("Bemfa TCP received topic=%s msg=%s", topic, self._msg_to_text(msg))
-        self._suppress_state_feedback(sync, seconds=2)
+        LOGGER.debug(
+            "Bemfa TCP received topic=%s msg=%s", topic, self._msg_to_text(msg)
+        )
         sync.resolve_msg(msg)
-        self._hass.async_create_task(
-            self._async_publish_control_feedback(sync, msg),
-            "bemfa_cloud_control_feedback",
-        )
+        self._schedule_publish(sync, CONTROL_FEEDBACK_DELAY)
 
-    def _suppress_state_feedback(self, sync: Sync, seconds: int) -> None:
-        until = self._hass.loop.time() + seconds
-        for entity_id in sync.get_watched_entity_ids():
-            self._feedback_suppressed_until[entity_id] = until
+    def _schedule_publish(self, sync: Sync, delay: float) -> None:
+        """Merge state events and control feedback, with a bounded wait."""
 
-    async def _async_publish_control_feedback(self, sync: Sync, msg: Any) -> None:
-        """Publish a complete state payload shortly after a control command."""
-
-        await asyncio.sleep(1)
-        feedback = sync.generate_feedback_msg(msg)
-        if not feedback:
+        if self._stopped.is_set() or self._topic_to_sync.get(sync.topic) is not sync:
             return
-        await self._send(
-            {
-                "cmd": 2,
-                "uid": self._uid,
-                "topics": [sync.topic],
-                "msg": feedback,
-                "mode": 3,
-            }
+        topic = sync.topic
+        now = self._hass.loop.time()
+        max_deadline = self._publish_max_deadlines.setdefault(
+            topic, now + MAX_PUBLISH_DELAY
         )
+        self._publish_deadlines[topic] = min(
+            max(self._publish_deadlines.get(topic, 0), now + delay), max_deadline
+        )
+        if topic not in self._publish_tasks:
+            self._publish_tasks[topic] = self._hass.async_create_background_task(
+                self._async_publish_pending(topic), "bemfa_cloud_state_publish"
+            )
+
+    async def _async_publish_pending(self, topic: str) -> None:
+        """Publish the latest HA state, including changes arriving during a send."""
+
+        try:
+            while not self._stopped.is_set() and topic in self._topic_to_sync:
+                deadline = self._publish_deadlines.get(topic)
+                if deadline is None:
+                    return
+                remaining = deadline - self._hass.loop.time()
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+                    continue
+                self._publish_deadlines.pop(topic, None)
+                self._publish_max_deadlines.pop(topic, None)
+                await self.async_publish_sync(self._topic_to_sync[topic])
+        finally:
+            if self._publish_tasks.get(topic) is asyncio.current_task():
+                self._publish_tasks.pop(topic, None)
+                self._publish_deadlines.pop(topic, None)
+                self._publish_max_deadlines.pop(topic, None)
 
     async def _state_listener(self, event) -> None:
+        if self._stopped.is_set():
+            return
         new_state = event.data.get("new_state")
         if new_state is None:
             return
         entity_id = new_state.entity_id
-        suppress_until = self._feedback_suppressed_until.get(entity_id, 0)
-        if suppress_until > self._hass.loop.time():
-            return
-        self._feedback_suppressed_until.pop(entity_id, None)
         for sync in list(self._topic_to_sync.values()):
             if entity_id in sync.get_watched_entity_ids():
-                await self.async_publish_sync(sync)
+                self._schedule_publish(sync, STATE_PUBLISH_DELAY)
 
     async def _subscribe(self, topics: list[str]) -> bool:
         if topics:
             LOGGER.info("Bemfa TCP subscribe topics: %s", topics)
-            if not await self._send({"cmd": 1, "uid": self._uid, "topics": topics, "mode": 0}):
+            if not await self._send(
+                {"cmd": 1, "uid": self._uid, "topics": topics, "mode": 0}
+            ):
                 await self._close_writer()
                 return False
         return True
@@ -241,7 +312,7 @@ class BemfaCloudTcp:
 
     async def _send(self, payload: dict[str, Any]) -> bool:
         writer = self._writer
-        if writer is None or writer.is_closing():
+        if self._stopped.is_set() or writer is None or writer.is_closing():
             return False
         try:
             writer.write(
@@ -253,13 +324,19 @@ class BemfaCloudTcp:
             await writer.drain()
         except Exception as err:  # noqa: BLE001
             LOGGER.warning("Bemfa TCP send failed: %s", err)
-            await self._close_writer()
+            if self._writer is writer:
+                await self._close_writer()
             return False
-        return True
+        return (
+            not self._stopped.is_set()
+            and self._writer is writer
+            and not writer.is_closing()
+        )
 
     async def _close_writer(self) -> None:
         writer = self._writer
         self._writer = None
+        self._last_published.clear()
         if writer is None:
             return
         writer.close()

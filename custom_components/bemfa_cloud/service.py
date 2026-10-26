@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
+from typing import Any
 
 from homeassistant.const import SERVICE_TURN_OFF, SERVICE_TURN_ON
-from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import area_registry, device_registry, entity_registry
 from homeassistant.helpers.start import async_at_started
 
@@ -32,20 +34,30 @@ class BemfaCloudService:
         self._config: dict[str, dict[str, str]] = {}
         self._syncs_by_entity_id: dict[str, Sync] = {}
         self._unsub_registry_listeners: list[CALLBACK_TYPE] = []
+        self._cancel_start: CALLBACK_TYPE | None = None
+        self._tasks: set[asyncio.Task[None]] = set()
+        self._stopped = True
 
     async def async_start(self, config: dict[str, dict[str, str]]) -> None:
         """Start service and restore configured syncs."""
 
+        if not self._stopped:
+            return
+        self._stopped = False
         self._config = config
         await self._tcp.async_start()
 
-        async def _start(hass: HomeAssistant) -> None:
-            await self._async_restore_syncs_with_retry()
+        @callback
+        def _start(hass: HomeAssistant) -> None:
+            if not self._stopped:
+                self._create_task(
+                    self._async_restore_syncs_with_retry(), "bemfa_cloud_restore"
+                )
 
         # The entity registry must be fully loaded before topic hashes are
         # calculated. Otherwise a restart can derive one topic from entity_id
         # and another from unique_id for the same HA entity.
-        async_at_started(self._hass, _start)
+        self._cancel_start = async_at_started(self._hass, _start)
 
         self._start_registry_listeners()
 
@@ -73,10 +85,27 @@ class BemfaCloudService:
     async def async_stop(self) -> None:
         """Stop service."""
 
+        self._stopped = True
+        if self._cancel_start is not None:
+            self._cancel_start()
+            self._cancel_start = None
         for unsub in self._unsub_registry_listeners:
             unsub()
         self._unsub_registry_listeners.clear()
+        tasks = list(self._tasks)
+        for task in tasks:
+            task.cancel()
         await self._tcp.async_stop()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()
+
+    def _create_task(self, coro: Coroutine[Any, Any, None], name: str) -> None:
+        """Track service work so unloading cancels and waits for it."""
+
+        task = self._hass.async_create_background_task(coro, name)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _async_restore_syncs(self) -> None:
         syncs = []
@@ -262,23 +291,27 @@ class BemfaCloudService:
     def _start_registry_listeners(self) -> None:
         """Listen for HA name and area changes and mirror them to Bemfa."""
 
-        self._unsub_registry_listeners.append(
-            self._hass.bus.async_listen(
-                entity_registry.EVENT_ENTITY_REGISTRY_UPDATED,
-                self._async_entity_registry_updated,
+        def _listen(event_type, listener) -> None:
+            @callback
+            def _handle_event(event: Event) -> None:
+                if not self._stopped:
+                    self._create_task(listener(event), "bemfa_cloud_registry_update")
+
+            self._unsub_registry_listeners.append(
+                self._hass.bus.async_listen(event_type, _handle_event)
             )
+
+        _listen(
+            entity_registry.EVENT_ENTITY_REGISTRY_UPDATED,
+            self._async_entity_registry_updated,
         )
-        self._unsub_registry_listeners.append(
-            self._hass.bus.async_listen(
-                device_registry.EVENT_DEVICE_REGISTRY_UPDATED,
-                self._async_device_registry_updated,
-            )
+        _listen(
+            device_registry.EVENT_DEVICE_REGISTRY_UPDATED,
+            self._async_device_registry_updated,
         )
-        self._unsub_registry_listeners.append(
-            self._hass.bus.async_listen(
-                area_registry.EVENT_AREA_REGISTRY_UPDATED,
-                self._async_area_registry_updated,
-            )
+        _listen(
+            area_registry.EVENT_AREA_REGISTRY_UPDATED,
+            self._async_area_registry_updated,
         )
 
     async def _async_entity_registry_updated(self, event: Event) -> None:

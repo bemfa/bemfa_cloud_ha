@@ -26,10 +26,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})
     service = BemfaCloudService(hass, dict(entry.data))
-    await service.async_start(entry.options.get(OPTIONS_CONFIG, {}))
+    try:
+        await service.async_start(entry.options.get(OPTIONS_CONFIG, {}))
+        _async_update_next_step_notification(hass, entry)
+    except BaseException:
+        # HA cannot unload a service that never completed setup. Clean up even
+        # when setup is cancelled after opening a connection or adding listeners.
+        await service.async_stop()
+        raise
     hass.data[DOMAIN][entry.entry_id] = {"service": service}
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
-    _async_update_next_step_notification(hass, entry)
     return True
 
 
@@ -45,8 +51,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload a config entry."""
 
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 def _async_update_next_step_notification(hass: HomeAssistant, entry: ConfigEntry) -> None:

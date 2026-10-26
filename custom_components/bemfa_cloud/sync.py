@@ -1,10 +1,11 @@
 """Support for bemfa service."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
 import hashlib
 from typing import Any
 import voluptuous as vol
@@ -77,6 +78,19 @@ class Sync(ABC):
         self._name = name
         self._topic = None
         self._config = {}
+        self._control_tasks: set[asyncio.Task[None]] = set()
+        self._stopped = False
+
+    async def async_stop(self) -> None:
+        """Cancel pending device operations when this sync is removed."""
+
+        self._stopped = True
+        tasks = list(self._control_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._control_tasks.clear()
 
     @property
     def entity_id(self) -> str:
@@ -161,21 +175,9 @@ class Sync(ABC):
         return payload
 
     def generate_feedback_msg(self, control_msg: Any) -> dict[str, Any]:
-        """Generate a full feedback message after a Bemfa control command."""
+        """Report actual HA state without overlaying earlier control parameters."""
 
-        control_payload = self._parse_json_payload(control_msg)
-        suffix = self._get_topic_suffix()
-        payload = self.generate_msg()
-        if control_payload is None:
-            return payload
-
-        if suffix in (TopicSuffix.CLIMATE, TopicSuffix.THERMOSTAT):
-            for key in ("on", "mode", "t", "fan", "l2r", "u2d"):
-                if key in control_payload:
-                    payload[key] = control_payload[key]
-            if "v" in control_payload and "fan" not in control_payload:
-                payload["fan"] = control_payload["v"]
-        return payload
+        return self.generate_msg()
 
     @staticmethod
     def _parse_json_payload(msg: Any) -> dict[str, Any] | None:
@@ -466,8 +468,10 @@ class ControllableSync(Sync):
     def _async_call_service(
         self, domain: str, service: str, data: dict[str, Any]
     ) -> None:
+        if self._stopped:
+            return
         data.update({ATTR_ENTITY_ID: self._entity_id})
-        self._hass.async_create_task(
+        self._create_control_task(
             self._hass.services.async_call(
                 domain=domain,
                 service=service,
@@ -480,6 +484,9 @@ class ControllableSync(Sync):
         self, calls: list[tuple[str, str, dict[str, Any]]]
     ) -> None:
         """Execute a list of (domain, service, data) calls sequentially in order."""
+        if self._stopped:
+            return
+
         async def _run() -> None:
             for domain, service, data in calls:
                 data[ATTR_ENTITY_ID] = self._entity_id
@@ -489,7 +496,14 @@ class ControllableSync(Sync):
                     service_data=data,
                     blocking=True,
                 )
-        self._hass.async_create_task(_run())
+        self._create_control_task(_run())
+
+    def _create_control_task(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Track pending control work without merging device commands."""
+
+        task = self._hass.async_create_task(coro)
+        self._control_tasks.add(task)
+        task.add_done_callback(self._control_tasks.discard)
 
 
 def _to_int(value: Any) -> int:
