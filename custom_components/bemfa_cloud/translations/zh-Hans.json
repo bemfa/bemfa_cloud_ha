@@ -20,6 +20,13 @@
         "title": "微信扫码登录",
         "description": "请使用微信扫描下方二维码。扫码成功后，此页面会自动继续。\n\n下一步可以选择要同步到巴法云的 Home Assistant 实体。\n\n![微信扫码登录二维码]({qr_image})"
       },
+      "select_devices": {
+        "title": "选择同步设备",
+        "description": "勾选要同步到巴法云的设备，提交后生效。",
+        "data": {
+          "select": "同步设备"
+        }
+      },
       "setup_next": {
         "title": "下一步：同步设备",
         "description": "巴法云账号已验证。点击 **提交** 完成添加。\n\n然后回到 Bemfa Cloud 卡片，点击 **配置**，选择 **批量添加同步**，勾选要同步的设备。\n\n只有选中的实体才会创建到巴法云。"
@@ -44,11 +51,15 @@
     }
   },
   "options": {
-    "error": {
-      "cannot_sync": "同步到巴法云失败，请检查私钥是否正确、网络是否可访问，并查看 Home Assistant 日志中的详细错误。"
-    },
     "step": {
       "init": {
+        "title": "同步设备",
+        "description": "勾选要同步到巴法云的设备，提交后生效。",
+        "data": {
+          "select": "同步设备"
+        }
+      },
+      "legacy_menu": {
         "title": "Bemfa Cloud",
         "menu_options": {
           "create_all_syncs": "批量添加同步",
@@ -171,6 +182,9 @@
           "name": "名称"
         }
       }
+    },
+    "error": {
+      "cannot_sync": "同步到巴法云失败，请检查私钥是否正确、网络是否可访问，并查看 Home Assistant 日志中的详细错误。"
     }
   }
 }

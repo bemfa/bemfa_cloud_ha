@@ -20,6 +20,13 @@
         "title": "Sign in with WeChat",
         "description": "Scan this QR code with WeChat. This page will continue automatically after the scan succeeds.\n\nYou can choose which Home Assistant entities to sync in the next step.\n\n![WeChat QR code]({qr_image})"
       },
+      "select_devices": {
+        "title": "Select devices to sync",
+        "description": "Select devices to sync to Bemfa Cloud, then submit to apply.",
+        "data": {
+          "select": "Devices to sync"
+        }
+      },
       "setup_next": {
         "title": "Next: sync your devices",
         "description": "The Bemfa Cloud account has been verified. Click **Submit** to finish adding it.\n\nThen return to the Bemfa Cloud card, click **Configure**, and choose **Add syncs in bulk** to select the devices you want to sync.\n\nOnly selected entities will be created in Bemfa Cloud."
@@ -44,11 +51,15 @@
     }
   },
   "options": {
-    "error": {
-      "cannot_sync": "Failed to sync to Bemfa Cloud. Check that the private key is correct, the network is reachable, and see the Home Assistant logs for details."
-    },
     "step": {
       "init": {
+        "title": "Devices to sync",
+        "description": "Select devices to sync to Bemfa Cloud, then submit to apply.",
+        "data": {
+          "select": "Devices to sync"
+        }
+      },
+      "legacy_menu": {
         "title": "Bemfa Cloud",
         "menu_options": {
           "create_all_syncs": "Add syncs in bulk",
@@ -171,6 +182,9 @@
           "name": "Name"
         }
       }
+    },
+    "error": {
+      "cannot_sync": "Failed to sync to Bemfa Cloud. Check that the private key is correct, the network is reachable, and see the Home Assistant logs for details."
     }
   }
 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+from collections import Counter
 import hashlib
 import logging
 import re
@@ -17,7 +18,7 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers import config_entry_oauth2_flow
+from homeassistant.helpers import entity_registry
 from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2FlowHandler
 from homeassistant.helpers.selector import (
     SelectOptionDict,
@@ -25,7 +26,6 @@ from homeassistant.helpers.selector import (
     SelectSelectorConfig,
     SelectSelectorMode,
 )
-from homeassistant.helpers import entity_registry
 
 from .const import (
     AUTH_MODE_KEYS,
@@ -43,9 +43,9 @@ from .const import (
     WECHAT_LOGIN_POLL_URL,
     WECHAT_SESSION_URL,
 )
+from .service import BemfaCloudService
 from .sync import Sync
 
-ERROR_CANNOT_SYNC = "cannot_sync"
 ERROR_WECHAT_NOT_SCANNED = "wechat_not_scanned"
 ERROR_WECHAT_QR_FAILED = "wechat_qr_failed"
 ERROR_WECHAT_LOGIN_FAILED = "wechat_login_failed"
@@ -82,6 +82,114 @@ STEP_KEYS_SCHEMA = vol.Schema(
 _UID_RE = re.compile(r"^[0-9a-fA-F]{32}$|^[A-Za-z0-9_-]{45}$")
 
 
+def _is_recommended_batch_sync(hass: HomeAssistant, sync: Sync) -> bool:
+    """Return whether a sync should appear in the bulk setup list."""
+
+    if sync.get_config_step_id() == "sync_config_sensor":
+        return False
+
+    domain = sync.entity_id.split(".", 1)[0]
+    if domain in BATCH_PRIMARY_DOMAINS:
+        return True
+    if domain not in BATCH_STANDALONE_DOMAINS:
+        return False
+
+    entity_reg = entity_registry.async_get(hass)
+    entry = entity_reg.async_get(sync.entity_id)
+    if entry is None or entry.device_id is None:
+        return True
+
+    for device_entry in entity_registry.async_entries_for_device(
+        entity_reg, entry.device_id
+    ):
+        device_domain = device_entry.entity_id.split(".", 1)[0]
+        if device_domain in BATCH_PRIMARY_DOMAINS:
+            return False
+    return True
+
+
+def _collect_selectable_syncs(
+    hass: HomeAssistant,
+    credentials: dict[str, Any],
+    config: dict[str, dict[str, str]],
+) -> dict[str, Sync]:
+    """Keep the existing bulk device rules and all previously selected syncs."""
+
+    service = BemfaCloudService(hass, credentials)
+    return {
+        sync.topic: sync
+        for sync in service.collect_supported_syncs()
+        if sync.topic in config or _is_recommended_batch_sync(hass, sync)
+    }
+
+
+def _device_selection_schema(
+    syncs: dict[str, Sync], config: dict[str, dict[str, str]]
+) -> vol.Schema:
+    """Show available and previously selected devices in a single checklist."""
+
+    names = {
+        topic: config.get(topic, {}).get(OPTIONS_NAME, sync.name)
+        for topic, sync in syncs.items()
+    }
+    name_counts = Counter(names.values())
+    name_counts.update(
+        settings.get(OPTIONS_NAME, topic)
+        for topic, settings in config.items()
+        if topic not in syncs
+    )
+    options = {
+        topic: SelectOptionDict(
+            value=topic,
+            label=(
+                f"{names[topic]} ({sync.entity_id})"
+                if name_counts[names[topic]] > 1
+                else names[topic]
+            ),
+        )
+        for topic, sync in syncs.items()
+    }
+    # Keep saved devices selectable even while their HA entities are absent.
+    for topic, settings in config.items():
+        if topic not in options:
+            options[topic] = SelectOptionDict(
+                value=topic,
+                label=(
+                    f"{settings.get(OPTIONS_NAME, topic)} ({topic})"
+                    if name_counts[settings.get(OPTIONS_NAME, topic)] > 1
+                    else settings.get(OPTIONS_NAME, topic)
+                ),
+            )
+    return vol.Schema(
+        {
+            vol.Required(OPTIONS_SELECT, default=list(config)): SelectSelector(
+                SelectSelectorConfig(
+                    options=sorted(
+                        options.values(), key=lambda item: item["label"].casefold()
+                    ),
+                    mode=SelectSelectorMode.LIST,
+                    multiple=True,
+                )
+            )
+        }
+    )
+
+
+def _selected_sync_config(
+    selected: list[str],
+    syncs: dict[str, Sync],
+    config: dict[str, dict[str, str]],
+) -> dict[str, dict[str, str]]:
+    """Keep exactly the selected topics, preserving their existing settings."""
+
+    return {
+        topic: config[topic].copy()
+        if topic in config
+        else {OPTIONS_NAME: syncs[topic].name}
+        for topic in selected
+    }
+
+
 class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
     """Handle a config flow for Bemfa Cloud."""
 
@@ -99,6 +207,7 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
         self._wechat_login_task: asyncio.Task[dict[str, Any] | None] | None = None
         self._wechat_login_data: dict[str, Any] | None = None
         self._pending_entry_data: dict[str, Any] | None = None
+        self._syncs: dict[str, Sync] = {}
 
     @property
     def logger(self) -> logging.Logger:
@@ -128,13 +237,13 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
                     CONF_REGION: BEMFA_REGION,
                     CONF_AUTH_MODE: AUTH_MODE_KEYS,
                 }
-                return await self._async_show_setup_next(data)
+                return await self._async_show_device_selection(data)
 
         return self.async_show_form(
             step_id="keys",
             data_schema=STEP_KEYS_SCHEMA,
             errors=errors,
-            last_step=True,
+            last_step=False,
         )
 
     async def async_step_wechat_scan(
@@ -199,7 +308,7 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             CONF_REGION: BEMFA_REGION,
             CONF_AUTH_MODE: AUTH_MODE_WECHAT_SCAN,
         }
-        return await self._async_show_setup_next(entry_data)
+        return await self._async_show_device_selection(entry_data)
 
     async def async_step_wechat_timeout(
         self, user_input: dict[str, Any] | None = None
@@ -254,10 +363,44 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
             CONF_REGION: BEMFA_REGION,
             CONF_AUTH_MODE: AUTH_MODE_OAUTH,
         }
-        return await self._async_show_setup_next(entry_data)
+        return await self._async_show_device_selection(entry_data)
+
+    async def _async_show_device_selection(self, data: dict[str, Any]) -> FlowResult:
+        """Go directly from successful authentication to device selection."""
+
+        uid = data[CONF_UID]
+        uid_md5 = hashlib.md5(uid.encode("utf-8")).hexdigest()
+        await self.async_set_unique_id(uid_md5)
+        self._abort_if_unique_id_configured()
+        self._pending_entry_data = data
+        # Discovery only reads HA entities; no cloud topics or TCP connection
+        # are created until the user submits the selection and HA sets up entry.
+        self._syncs = _collect_selectable_syncs(self.hass, data, {})
+        return await self.async_step_select_devices()
+
+    async def async_step_select_devices(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Choose the devices to sync before creating the account entry."""
+
+        assert self._pending_entry_data is not None
+        if user_input is not None:
+            uid = self._pending_entry_data[CONF_UID]
+            config = _selected_sync_config(user_input[OPTIONS_SELECT], self._syncs, {})
+            return self.async_create_entry(
+                title=f"Bemfa Cloud ({uid[-6:]})",
+                data=self._pending_entry_data,
+                options={OPTIONS_CONFIG: config},
+            )
+
+        return self.async_show_form(
+            step_id="select_devices",
+            data_schema=_device_selection_schema(self._syncs, {}),
+            last_step=True,
+        )
 
     async def _async_show_setup_next(self, data: dict[str, Any]) -> FlowResult:
-        """Show the final setup instruction before creating an entry."""
+        """Retain the legacy setup dialog without linking it from login."""
 
         uid = data[CONF_UID]
         uid_md5 = hashlib.md5(uid.encode("utf-8")).hexdigest()
@@ -405,24 +548,49 @@ class ConfigFlow(AbstractOAuth2FlowHandler, domain=DOMAIN):
 
 
 class OptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle Bemfa Cloud options."""
+    """Manage synced devices with one checklist."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
 
+        # State used only by the retained, hidden legacy dialogs.
         self._entry_id = config_entry.entry_id
-        self._config: dict[str, dict[str, str]] = (
-            config_entry.options.get(OPTIONS_CONFIG, {}).copy()
-        )
         self._sync_dict: dict[str, Sync] = {}
         self._sync: Sync | None = None
         self._is_create = True
+        self._credentials = dict(config_entry.data)
+        self._options = dict(config_entry.options)
+        self._config = {
+            topic: settings.copy()
+            for topic, settings in config_entry.options.get(OPTIONS_CONFIG, {}).items()
+        }
+        self._syncs: dict[str, Sync] = {}
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Show option menu."""
+        """Show devices directly, with current syncs already selected."""
+
+        if user_input is not None:
+            config = _selected_sync_config(
+                user_input[OPTIONS_SELECT], self._syncs, self._config
+            )
+            return self.async_create_entry(
+                title="", data={**self._options, OPTIONS_CONFIG: config}
+            )
+
+        self._syncs = _collect_selectable_syncs(
+            self.hass, self._credentials, self._config
+        )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=_device_selection_schema(self._syncs, self._config),
+            last_step=True,
+        )
+
+    async def async_step_legacy_menu(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Retain the legacy dialogs without exposing a menu entry."""
 
         return self.async_show_menu(
-            step_id="init",
+            step_id="legacy_menu",
             menu_options=["create_all_syncs", "create_sync", "modify_sync", "destroy_sync"],
         )
 
@@ -596,7 +764,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_empty(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """No data found."""
 
-        return await self.async_step_init(user_input)
+        return await self.async_step_legacy_menu(user_input)
 
     def _collect_unconfigured_syncs(self) -> dict[str, Sync]:
         return {
