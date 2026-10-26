@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ssl
 from typing import Any
 
 from homeassistant.const import EVENT_STATE_CHANGED
@@ -17,6 +18,7 @@ from .const import (
     TCP_PORT,
     TCP_RECONNECT_DELAY,
     TCP_RESUBSCRIBE_INTERVAL,
+    TCP_TLS_SHUTDOWN_TIMEOUT,
 )
 from .sync import Sync
 
@@ -36,6 +38,8 @@ class BemfaCloudTcp:
         self._topic_to_sync: dict[str, Sync] = {}
         self._writer: asyncio.StreamWriter | None = None
         self._runner: asyncio.Task[None] | None = None
+        self._ssl_context: ssl.SSLContext | None = None
+        self._lifecycle_lock = asyncio.Lock()
         self._remove_listener: CALLBACK_TYPE | None = None
         self._publish_tasks: dict[str, asyncio.Task[None]] = {}
         self._publish_deadlines: dict[str, float] = {}
@@ -48,40 +52,47 @@ class BemfaCloudTcp:
     async def async_start(self) -> None:
         """Start connection management."""
 
-        if self._runner is not None:
-            return
+        async with self._lifecycle_lock:
+            if self._runner is not None:
+                return
 
-        self._stopped.clear()
-        self._remove_listener = self._hass.bus.async_listen(
-            EVENT_STATE_CHANGED, self._state_listener
-        )
-        self._runner = self._hass.async_create_background_task(
-            self._run(), "bemfa_cloud_tcp"
-        )
+            # Loading the system CA certificates can block; keep it off HA's loop.
+            self._ssl_context = await self._hass.async_add_executor_job(
+                ssl.create_default_context
+            )
+            self._ssl_context.minimum_version = ssl.TLSVersion.TLSv1_3
+            self._stopped.clear()
+            self._remove_listener = self._hass.bus.async_listen(
+                EVENT_STATE_CHANGED, self._state_listener
+            )
+            self._runner = self._hass.async_create_background_task(
+                self._run(), "bemfa_cloud_tcp"
+            )
 
     async def async_stop(self) -> None:
         """Stop the connection."""
 
-        self._stopped.set()
-        if self._remove_listener is not None:
-            self._remove_listener()
-            self._remove_listener = None
-        tasks = list(self._publish_tasks.values())
-        if self._runner is not None:
-            tasks.append(self._runner)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(
-            *tasks,
-            *(sync.async_stop() for sync in self._topic_to_sync.values()),
-            return_exceptions=True,
-        )
-        self._runner = None
-        self._publish_tasks.clear()
-        self._publish_deadlines.clear()
-        self._publish_max_deadlines.clear()
-        self._topic_to_sync.clear()
-        await self._close_writer()
+        async with self._lifecycle_lock:
+            self._stopped.set()
+            if self._remove_listener is not None:
+                self._remove_listener()
+                self._remove_listener = None
+            tasks = list(self._publish_tasks.values())
+            if self._runner is not None:
+                tasks.append(self._runner)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(
+                *tasks,
+                *(sync.async_stop() for sync in self._topic_to_sync.values()),
+                return_exceptions=True,
+            )
+            self._runner = None
+            self._publish_tasks.clear()
+            self._publish_deadlines.clear()
+            self._publish_max_deadlines.clear()
+            self._topic_to_sync.clear()
+            await self._close_writer()
 
     async def async_add_sync(self, sync: Sync) -> None:
         """Add a sync and publish its current state."""
@@ -172,7 +183,14 @@ class BemfaCloudTcp:
         while not self._stopped.is_set():
             try:
                 reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(TCP_HOST, TCP_PORT),
+                    asyncio.open_connection(
+                        TCP_HOST,
+                        TCP_PORT,
+                        ssl=self._ssl_context,
+                        server_hostname=TCP_HOST,
+                        ssl_handshake_timeout=TCP_CONNECT_TIMEOUT,
+                        ssl_shutdown_timeout=TCP_TLS_SHUTDOWN_TIMEOUT,
+                    ),
                     timeout=TCP_CONNECT_TIMEOUT,
                 )
                 self._writer = writer

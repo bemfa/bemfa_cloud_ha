@@ -8,7 +8,11 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import shutil
+import ssl
+import subprocess
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -127,6 +131,9 @@ class Hass:
 
     async_create_background_task = async_create_task
 
+    async def async_add_executor_job(self, target, *args):
+        return await asyncio.to_thread(target, *args)
+
 
 class Writer:
     def __init__(self, *, fail=False):
@@ -183,6 +190,37 @@ class Device(CODE.sync.ControllableSync):
 
 
 class TcpTests(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tls_files = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.tls_files.cleanup)
+        cls.cert_path = Path(cls.tls_files.name) / "cert.pem"
+        cls.key_path = Path(cls.tls_files.name) / "key.pem"
+        cls.has_openssl = shutil.which("openssl") is not None
+        if cls.has_openssl:
+            subprocess.run(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-newkey",
+                    "rsa:2048",
+                    "-nodes",
+                    "-days",
+                    "1",
+                    "-subj",
+                    "/CN=tcp-cn-03.bemfa.com",
+                    "-addext",
+                    "subjectAltName=DNS:tcp-cn-03.bemfa.com",
+                    "-keyout",
+                    str(cls.key_path),
+                    "-out",
+                    str(cls.cert_path),
+                ],
+                check=True,
+                capture_output=True,
+            )
+
     async def asyncSetUp(self):
         self.timing = patch.multiple(
             CODE.tcp,
@@ -334,7 +372,158 @@ class TcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(executed, ["first"])
         self.assertFalse(self.device._control_tasks)
 
-    async def test_reconnect_publishes_each_device_once_over_real_local_tcp(self):
+    async def test_certificate_failure_retries_tls_without_plaintext_fallback(self):
+        await self.tcp.async_stop()
+        attempts = []
+        retried = asyncio.Event()
+
+        async def rejected(host, port, **kwargs):
+            attempts.append((host, port, kwargs))
+            if len(attempts) >= 2:
+                retried.set()
+            raise ssl.SSLCertVerificationError("simulated untrusted certificate")
+
+        with (
+            patch.object(CODE.tcp.asyncio, "open_connection", rejected),
+            patch.object(CODE.tcp, "TCP_RECONNECT_DELAY", 0.01),
+            self.assertLogs(CODE.tcp.LOGGER, level="WARNING"),
+        ):
+            try:
+                await self.tcp.async_start()
+                await asyncio.wait_for(retried.wait(), 1)
+            finally:
+                await self.tcp.async_stop()
+        self.assertGreaterEqual(len(attempts), 2)
+        for host, port, kwargs in attempts:
+            self.assertEqual(host, "tcp-cn-03.bemfa.com")
+            self.assertEqual(port, 8343)
+            self.assertEqual(kwargs["server_hostname"], host)
+            self.assertEqual(kwargs["ssl"].verify_mode, ssl.CERT_REQUIRED)
+            self.assertEqual(kwargs["ssl"].minimum_version, ssl.TLSVersion.TLSv1_3)
+        self.assertIsNone(self.tcp._writer)
+
+    async def test_concurrent_start_creates_only_one_runner_and_listener(self):
+        await self.tcp.async_stop()
+        entered = asyncio.Event()
+        resume = asyncio.Event()
+
+        async def delayed_context(target, *args):
+            entered.set()
+            await resume.wait()
+            return ssl.create_default_context()
+
+        async def idle_runner():
+            await asyncio.Event().wait()
+
+        with (
+            patch.object(self.hass, "async_add_executor_job", delayed_context),
+            patch.object(self.tcp, "_run", idle_runner),
+        ):
+            first = asyncio.create_task(self.tcp.async_start())
+            await entered.wait()
+            second = asyncio.create_task(self.tcp.async_start())
+            await asyncio.sleep(0)
+            resume.set()
+            try:
+                await asyncio.gather(first, second)
+                self.assertEqual(len(self.hass.bus.listeners), 1)
+                self.assertEqual(sum(not task.done() for task in self.hass.tasks), 1)
+            finally:
+                # Also clean leaked tasks if this regression fails.
+                await self.tcp.async_stop()
+                for task in self.hass.tasks:
+                    task.cancel()
+                await asyncio.gather(*self.hass.tasks, return_exceptions=True)
+
+    async def test_stop_during_certificate_loading_leaves_no_connection_task(self):
+        await self.tcp.async_stop()
+        entered = asyncio.Event()
+        resume = asyncio.Event()
+
+        async def delayed_context(target, *args):
+            entered.set()
+            await resume.wait()
+            return ssl.create_default_context()
+
+        async def idle_runner():
+            await asyncio.Event().wait()
+
+        with (
+            patch.object(self.hass, "async_add_executor_job", delayed_context),
+            patch.object(self.tcp, "_run", idle_runner),
+        ):
+            start = asyncio.create_task(self.tcp.async_start())
+            await entered.wait()
+            stop = asyncio.create_task(self.tcp.async_stop())
+            await asyncio.sleep(0)
+            resume.set()
+            await asyncio.gather(start, stop)
+            self.assertTrue(self.tcp._stopped.is_set())
+            self.assertIsNone(self.tcp._runner)
+            self.assertFalse(self.hass.bus.listeners)
+            self.assertTrue(all(task.done() for task in self.hass.tasks))
+
+    async def test_stalled_tls_handshake_times_out_and_stop_closes_retry(self):
+        await self.tcp.async_stop()
+        connected_peers = asyncio.Queue()
+        closed_peers = asyncio.Queue()
+        peers = []
+
+        async def stalled(reader, writer):
+            peers.append(writer)
+            await connected_peers.put(writer)
+            try:
+                # Accept the TCP connection but never answer the TLS ClientHello.
+                await reader.read()
+            finally:
+                writer.close()
+                try:
+                    await asyncio.wait_for(writer.wait_closed(), 1)
+                except (TimeoutError, ConnectionError, ssl.SSLError):
+                    pass
+                await closed_peers.put(writer)
+
+        server = await asyncio.start_server(stalled, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        original_open = asyncio.open_connection
+
+        async def connect(host, port_number, **kwargs):
+            return await original_open("127.0.0.1", port, **kwargs)
+
+        try:
+            with (
+                patch.object(CODE.tcp.asyncio, "open_connection", connect),
+                patch.object(CODE.tcp, "TCP_CONNECT_TIMEOUT", 0.1),
+                patch.object(CODE.tcp, "TCP_RECONNECT_DELAY", 0.01),
+                self.assertLogs(CODE.tcp.LOGGER, level="WARNING"),
+            ):
+                await self.tcp.async_start()
+                first = await asyncio.wait_for(connected_peers.get(), 1)
+                self.assertIs(await asyncio.wait_for(closed_peers.get(), 1), first)
+                second = await asyncio.wait_for(connected_peers.get(), 1)
+                await asyncio.wait_for(self.tcp.async_stop(), 1)
+                self.assertIs(await asyncio.wait_for(closed_peers.get(), 1), second)
+                self.assertIsNone(self.tcp._writer)
+                self.assertIsNone(self.tcp._runner)
+                self.assertFalse(self.hass.bus.listeners)
+        finally:
+            await self.tcp.async_stop()
+            for writer in peers:
+                writer.close()
+            server.close()
+            await server.wait_closed()
+
+    async def test_reconnect_publishes_each_device_once_over_real_local_tls(self):
+        if not self.has_openssl:
+            self.skipTest("openssl is required to generate a local TLS certificate")
+        server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_context.minimum_version = ssl.TLSVersion.TLSv1_3
+        server_context.load_cert_chain(self.cert_path, self.key_path)
+        create_context = ssl.create_default_context
+
+        def trusted_context():
+            return create_context(cafile=str(self.cert_path))
+
         received = asyncio.Queue()
         peers = []
 
@@ -345,9 +534,18 @@ class TcpTests(unittest.IsolatedAsyncioTestCase):
                     await received.put(json.loads(raw))
             finally:
                 writer.close()
-                await writer.wait_closed()
+                try:
+                    await asyncio.wait_for(writer.wait_closed(), 1)
+                except (TimeoutError, ConnectionError, ssl.SSLError):
+                    pass
 
-        server = await asyncio.start_server(connected, "127.0.0.1", 0)
+        server = await asyncio.start_server(
+            connected,
+            "127.0.0.1",
+            0,
+            ssl=server_context,
+            ssl_shutdown_timeout=0.05,
+        )
         original_open = asyncio.open_connection
         port = server.sockets[0].getsockname()[1]
         await self.tcp.async_stop()
@@ -355,13 +553,25 @@ class TcpTests(unittest.IsolatedAsyncioTestCase):
         first = Device(self.hass)
         second = Device(self.hass, "climate.other")
 
-        async def connect(*args):
-            return await original_open("127.0.0.1", port)
+        async def connect(host, port_number, **kwargs):
+            self.assertEqual(host, "tcp-cn-03.bemfa.com")
+            self.assertEqual(port_number, 8343)
+            context = kwargs["ssl"]
+            self.assertIsInstance(context, ssl.SSLContext)
+            self.assertEqual(context.minimum_version, ssl.TLSVersion.TLSv1_3)
+            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+            self.assertTrue(context.check_hostname)
+            self.assertEqual(kwargs["server_hostname"], host)
+            reader, writer = await original_open("127.0.0.1", port, **kwargs)
+            self.assertEqual(writer.get_extra_info("ssl_object").version(), "TLSv1.3")
+            return reader, writer
 
         try:
             with (
                 patch.object(CODE.tcp.asyncio, "open_connection", connect),
+                patch.object(CODE.tcp.ssl, "create_default_context", trusted_context),
                 patch.object(CODE.tcp, "TCP_RECONNECT_DELAY", 0.01),
+                patch.object(CODE.tcp, "TCP_TLS_SHUTDOWN_TIMEOUT", 0.05),
             ):
                 await self.tcp.async_start()
                 await self.tcp.async_add_syncs([first, second])
@@ -378,14 +588,16 @@ class TcpTests(unittest.IsolatedAsyncioTestCase):
                         peers[0].close()
                         await peers[0].wait_closed()
                 self.assertEqual(len(peers), 2)
-                await self.tcp.async_stop()
+                # Simulate a server that stops processing TLS close_notify.
+                peers[-1].transport.pause_reading()
+                await asyncio.wait_for(self.tcp.async_stop(), 1)
                 self.assertFalse(self.hass.bus.listeners)
                 self.assertFalse(self.tcp._publish_tasks)
                 self.assertTrue(all(task.done() for task in self.hass.tasks))
         finally:
             await self.tcp.async_stop()
             for writer in peers:
-                writer.close()
+                writer.transport.abort()
             server.close()
             await server.wait_closed()
 
