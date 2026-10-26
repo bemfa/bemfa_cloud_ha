@@ -24,11 +24,8 @@ OAUTH_CLIENT_ID: Final = "88ac425b4558463aa813aed1690db730"
 OAUTH_CLIENT_SECRET: Final = ""
 OAUTH_AUTHORIZE_URL: Final = "https://cloud.bemfa.com/web/mi/index.html"
 OAUTH_TOKEN_URL: Final = "https://pro.bemfa.com/vs/speaker/v1/v2SpeakerToken"
-WECHAT_QR_URL: Final = "https://go.bemfa.com/v3/getwximg?key=bemfa&q=2"
-WECHAT_QR_IMAGE_URL: Final = (
-    "https://mp.weixin.qq.com/cgi-bin/showqrcode?ticket={ticket}"
-)
-WECHAT_LOGIN_POLL_URL: Final = "https://go.bemfa.com/vb/web/v2/wechatLoginByEventKey"
+WECHAT_SESSION_URL: Final = "https://pro.bemfa.com/v4/official/v1/wechatLoginSession"
+WECHAT_LOGIN_POLL_URL: Final = "https://pro.bemfa.com/v4/official/v1/wechatLoginExchange"
 
 OPTIONS_CONFIG: Final = "config"
 OPTIONS_SELECT: Final = "select"
