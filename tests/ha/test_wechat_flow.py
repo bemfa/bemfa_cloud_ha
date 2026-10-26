@@ -55,6 +55,12 @@ class WechatFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.patch.start()
         self.addCleanup(self.patch.stop)
+        discovery_session = patch(
+            "custom_components.bemfa_cloud.http.async_get_clientsession",
+            return_value=self.session,
+        )
+        discovery_session.start()
+        self.addCleanup(discovery_session.stop)
 
     async def asyncTearDown(self):
         if task := self.flow._wechat_login_task:
@@ -83,7 +89,7 @@ class WechatFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await self.flow.async_step_wechat_done()
         self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "setup_next")
+        self.assertEqual(result["step_id"], "select_devices")
         self.assertEqual(self.flow._pending_entry_data["uid"], UID)
         self.session.post.assert_any_call(WECHAT_SESSION_URL, timeout=30)
         self.session.post.assert_any_call(

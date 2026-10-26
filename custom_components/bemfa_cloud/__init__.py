@@ -58,7 +58,7 @@ def _async_update_next_step_notification(hass: HomeAssistant, entry: ConfigEntry
     """Remind users to configure syncs after adding an account."""
 
     notification_id = f"{DOMAIN}_{entry.entry_id}_next_step"
-    if entry.options.get(OPTIONS_CONFIG):
+    if OPTIONS_CONFIG in entry.options:
         persistent_notification.async_dismiss(hass, notification_id)
         return
 
@@ -66,16 +66,15 @@ def _async_update_next_step_notification(hass: HomeAssistant, entry: ConfigEntry
         title = "Bemfa Cloud 已添加"
         message = (
             "账号已经添加成功。请回到 Bemfa Cloud 卡片，点击 **配置**，"
-            "选择 **批量添加同步**，勾选要同步的设备。\n\n"
-            "只有选中的实体才会创建到巴法云。"
+            "勾选要同步的设备并保存。\n\n"
+            "勾选的设备会同步，取消勾选则停止同步。"
         )
     else:
         title = "Bemfa Cloud added"
         message = (
             "The account has been added. Return to the Bemfa Cloud card, click "
-            "**Configure**, and choose **Add syncs in bulk** to select the devices "
-            "you want to sync.\n\n"
-            "Only selected entities will be created in Bemfa Cloud."
+            "**Configure**, select the devices you want to sync, and save.\n\n"
+            "Selected devices are synced; deselect a device to stop syncing it."
         )
 
     persistent_notification.async_create(
