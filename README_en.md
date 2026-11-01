@@ -9,36 +9,23 @@
 
 _Sync Home Assistant devices to Bemfa Cloud._
 
-**Bemfa Cloud maps local Home Assistant entities to Bemfa TCP V2 devices, so they can be controlled through Bemfa Cloud, voice assistants, and other Bemfa-compatible clients.**
+**Bemfa Cloud syncs Home Assistant devices to Bemfa Cloud, so you can control them through Bemfa Cloud, voice assistants, and other compatible apps.**
 
 [简体中文](README.md) | English
 
 ## Features
 
 - **Two authentication modes**: Bemfa private key input and OAuth login
-- **On-demand topic creation**: Creates Bemfa TCP V2 topics for the HA entities you choose to sync
-- **Batch creation**: Uses the batch API when multiple topics need to be created
-- **TCP long connection**: Subscribes to control messages through Bemfa TCP JSON V2
+- **Device selection**: Choose which HA devices to sync to Bemfa Cloud
+- **Remote control**: Control synced devices through Bemfa Cloud, voice assistants, and other compatible apps
 - **State sync**: Publishes HA state changes back to Bemfa Cloud
-- **Name and room sync**: Mirrors HA entity name, area assignment, and area name changes to Bemfa topic name and room
+- **Name and room sync**: Mirrors HA entity name, area assignment, and area name changes to Bemfa device names and rooms
 - **More stable sync relationships**: Renaming entities or changing rooms usually does not create duplicate Bemfa devices
-- **Source filtering**: Skips BeHome-created HA entities to avoid syncing Bemfa devices back to Bemfa Cloud
+- **BeHome compatibility**: Skips devices added by BeHome to avoid duplicate syncing
 
 ## Supported Device Types
 
-| Bemfa suffix | Device type | Default HA mapping |
-| --- | --- | --- |
-| `001` | Outlet | `switch` with `device_class=outlet` |
-| `002` | Light | `light` |
-| `003` | Fan | regular `fan` |
-| `004` | Sensor | `sensor`, `binary_sensor` |
-| `005` | Air conditioner | `climate` with cooling/heating support |
-| `006` | Switch | `switch`, `input_boolean`, `script`, `automation`, `remote`, and other entities with `turn_on/turn_off` services |
-| `009` | Cover | `cover` |
-| `010` | Thermostat | non-air-conditioner `climate` |
-| `011` | Water heater | `water_heater` |
-| `012` | TV | `media_player` |
-| `013` | Air purifier | `fan` with `device_class=air_purifier` |
+Supported devices include outlets, lights, fans, sensors, air conditioners, switches, covers, thermostats, water heaters, TVs, and air purifiers. Scripts and automations can also be synced as switches. See the configuration page for the devices available to sync.
 
 ## Installation
 
@@ -76,12 +63,12 @@ To sync devices to multiple Bemfa Cloud accounts, add multiple Bemfa Cloud hubs.
 2. Search for **Bemfa Cloud**
 3. Choose **Private Key**
 4. Enter your Bemfa private key `uid`
-5. After login, select the HA entities to sync directly from the device list and save. The list keeps the existing rules for main devices such as climate, covers, lights, and switches.
+5. After login, select the HA entities to sync from the device list and save. The list shows devices such as air conditioners, covers, lights, and switches by default.
 6. Click **Configure** on Bemfa Cloud to change the selection later. Existing syncs are selected by default. Deselect a device and save to stop syncing it; you can also deselect all devices.
 
 ### OAuth Mode
 
-Most users should use private key mode. OAuth mode reuses the BeHome authentication flow and is mainly for scenarios that need the BeHome authorization flow. Users who use OAuth need to create application credentials first.
+Private key mode is recommended for most users. To use OAuth login, create application credentials first.
 
 1. Go to **Settings** -> **Devices & Services** -> **Helpers** -> **Application Credentials**
 2. Create a new credential:
@@ -100,7 +87,7 @@ If OAuth redirects to `homeassistant.local` and the browser cannot open it, conf
 - BeHome syncs **Bemfa Cloud -> HA**
 - Both integrations can be installed together. Bemfa Cloud skips BeHome-created entities to avoid duplicates and control loops
 - The same HA entity can be added to different Bemfa Cloud hubs, and each hub keeps its own sync configuration
-- The integration uses stable Home Assistant entity identifiers when possible. Entities without a stable identifier fall back to `entity_id`, so changing `entity_id` may create a new Bemfa topic
+- Changing the entity ID of some HA entities may create a new device in Bemfa Cloud
 - After upgrading from an older version, if duplicate devices appear in Bemfa Cloud, remove the old devices manually from the Bemfa console
 
 ## FAQ
@@ -111,25 +98,15 @@ Check that the Bemfa private key is correct, Home Assistant can access the inter
 
 ### Does removing a local sync delete the Bemfa Cloud device?
 
-No. It only stops this integration from syncing that entity. The Bemfa Cloud topic must be removed manually from the Bemfa console.
+No. It only stops this integration from syncing that entity. The device in Bemfa Cloud must be removed manually from the Bemfa console.
 
 ### What happens if I change a Home Assistant entity ID?
 
-For entities without a stable identifier, changing `entity_id` may create a new device in Bemfa Cloud.
+Changing the ID of some entities may create a new device in Bemfa Cloud. If duplicates appear, remove the old device manually from the Bemfa console.
 
-### How does air conditioner fan speed `fan` work?
+### How are air conditioner fan speeds matched?
 
-`fan=0` means auto fan, `fan=1` to `fan=5` map to fan speeds 1 to 5, and `fan=7/8/9` mean low, medium, and high fan. Fan speeds are matched automatically to the modes supported by the HA climate entity. Existing custom mappings are preserved.
-
-## Implementation Notes
-
-1. The integration scans supported HA entities
-2. It excludes entities created by BeHome and Bemfa Cloud itself
-3. It generates Bemfa device topics from entity types
-4. It creates topics through the NoSecret APIs with fixed `type=7` and `region=cn-03`
-5. It subscribes to all topics through a TCP V2 long connection
-6. It calls HA services when Bemfa control messages are received
-7. It publishes HA state changes back to Bemfa Cloud; multiple devices use `cmd=2` `items` batches of up to 17 devices
+Automatic fan speed, numbered speeds, and low, medium, and high speeds are matched to the modes supported by your HA air conditioner. Existing custom mappings are preserved.
 
 ## Support
 
