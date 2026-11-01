@@ -25,6 +25,9 @@ from .sync import Sync
 STATE_PUBLISH_DELAY = 0.2
 CONTROL_FEEDBACK_DELAY = 1.0
 MAX_PUBLISH_DELAY = 2.0
+MAX_BATCH_ITEMS = 17
+MAX_TOPIC_BYTES = 48
+MAX_MSG_BYTES = 256
 
 
 class BemfaCloudTcp:
@@ -115,8 +118,7 @@ class BemfaCloudTcp:
             topics.append(sync.topic)
 
         await self._subscribe(topics)
-        for sync in syncs:
-            await self.async_publish_sync(sync)
+        await self._async_publish_syncs(syncs)
 
     async def async_subscribe_all(self) -> bool:
         """Subscribe all known topics on the current TCP connection."""
@@ -148,36 +150,76 @@ class BemfaCloudTcp:
     async def async_publish_sync(self, sync: Sync) -> None:
         """Publish the current Home Assistant state for a sync."""
 
+        await self._async_publish_syncs([sync])
+
+    async def _async_publish_syncs(self, syncs: list[Sync]) -> None:
+        """Publish current states, batching different topics when possible."""
+
         # Serialize comparison and writing so concurrent publishers cannot both
         # send the same state before either has updated the cache.
         async with self._publish_lock:
-            if (
-                self._stopped.is_set()
-                or self._topic_to_sync.get(sync.topic) is not sync
-            ):
+            if self._stopped.is_set():
                 return
-            msg = sync.generate_msg()
-            if not msg:
-                return
-            content = json.dumps(
-                msg, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-            )
-            if self._last_published.get(sync.topic) == content:
-                return
-            writer = self._writer
-            if (
-                await self._send(
-                    {
+
+            pending: list[tuple[Sync, dict[str, Any], str]] = []
+            seen_topics: set[str] = set()
+            for sync in syncs:
+                if sync.topic in seen_topics:
+                    continue
+                seen_topics.add(sync.topic)
+                if self._topic_to_sync.get(sync.topic) is not sync:
+                    continue
+                msg = sync.generate_msg()
+                if not msg:
+                    continue
+                content = json.dumps(
+                    msg, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+                if len(sync.topic.encode("utf-8")) > MAX_TOPIC_BYTES:
+                    LOGGER.warning(
+                        "Skip Bemfa state for %s: topic exceeds %s bytes",
+                        sync.topic,
+                        MAX_TOPIC_BYTES,
+                    )
+                    continue
+                if len(content.encode("utf-8")) > MAX_MSG_BYTES:
+                    LOGGER.warning(
+                        "Skip Bemfa state for %s: message exceeds %s bytes",
+                        sync.topic,
+                        MAX_MSG_BYTES,
+                    )
+                    continue
+                if self._last_published.get(sync.topic) == content:
+                    continue
+                pending.append((sync, msg, content))
+
+            for start in range(0, len(pending), MAX_BATCH_ITEMS):
+                batch = pending[start : start + MAX_BATCH_ITEMS]
+                if len(batch) == 1:
+                    sync, msg, content = batch[0]
+                    payload = {
                         "cmd": 2,
                         "uid": self._uid,
                         "topics": [sync.topic],
                         "msg": msg,
                         "mode": 3,
                     }
-                )
-                and self._writer is writer
-            ):
-                self._last_published[sync.topic] = content
+                else:
+                    payload = {
+                        "cmd": 2,
+                        "uid": self._uid,
+                        "mode": 3,
+                        "items": [
+                            {"topic": sync.topic, "msg": msg}
+                            for sync, msg, _content in batch
+                        ],
+                    }
+
+                writer = self._writer
+                if not await self._send(payload) or self._writer is not writer:
+                    break
+                for sync, _msg, content in batch:
+                    self._last_published[sync.topic] = content
 
     async def _run(self) -> None:
         while not self._stopped.is_set():
@@ -296,7 +338,23 @@ class BemfaCloudTcp:
                     continue
                 self._publish_deadlines.pop(topic, None)
                 self._publish_max_deadlines.pop(topic, None)
-                await self.async_publish_sync(self._topic_to_sync[topic])
+                now = self._hass.loop.time()
+                due_topics = [
+                    due_topic
+                    for due_topic, due_deadline in self._publish_deadlines.items()
+                    if due_deadline <= now
+                ]
+                due_syncs = [
+                    self._topic_to_sync[due_topic]
+                    for due_topic in due_topics
+                    if due_topic in self._topic_to_sync
+                ]
+                for due_topic in due_topics:
+                    self._publish_deadlines.pop(due_topic, None)
+                    self._publish_max_deadlines.pop(due_topic, None)
+                await self._async_publish_syncs(
+                    [self._topic_to_sync[topic], *due_syncs]
+                )
         finally:
             if self._publish_tasks.get(topic) is asyncio.current_task():
                 self._publish_tasks.pop(topic, None)
@@ -325,8 +383,7 @@ class BemfaCloudTcp:
         return True
 
     async def _publish_all(self) -> None:
-        for sync in list(self._topic_to_sync.values()):
-            await self.async_publish_sync(sync)
+        await self._async_publish_syncs(list(self._topic_to_sync.values()))
 
     async def _send(self, payload: dict[str, Any]) -> bool:
         writer = self._writer

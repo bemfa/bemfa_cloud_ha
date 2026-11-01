@@ -129,7 +129,7 @@ For entities without a stable identifier, changing `entity_id` may create a new 
 4. It creates topics through the NoSecret APIs with fixed `type=7` and `region=cn-03`
 5. It subscribes to all topics through a TCP V2 long connection
 6. It calls HA services when Bemfa control messages are received
-7. It publishes HA state changes back to Bemfa Cloud
+7. It publishes HA state changes back to Bemfa Cloud; multiple devices use `cmd=2` `items` batches of up to 17 devices
 
 ## Support
 
