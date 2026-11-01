@@ -37,8 +37,11 @@ class DeviceSelectionTests(unittest.IsolatedAsyncioTestCase):
         session_patch.start()
         self.addCleanup(session_patch.stop)
 
-        device_registry.async_setup(self.hass)
-        await device_registry.async_load(self.hass)
+        if hasattr(device_registry, "async_setup"):
+            device_registry.async_setup(self.hass)
+            await device_registry.async_load(self.hass)
+        else:
+            await device_registry.async_get(self.hass).async_load()
         self.hass.config_entries = ConfigEntries(self.hass, {})
         entry = self.entry({})
         self.hass.config_entries._entries[entry.entry_id] = entry

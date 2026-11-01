@@ -304,11 +304,19 @@ class TcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.tcp._publish_tasks), 2)
         self.assertEqual(len(self.device.controls), 20)
         await self.flush()
-        self.assertEqual(len(self.writer.messages), 2)
-        self.assertTrue(all(msg["msg"]["t"] == 26 for msg in self.writer.messages))
+        self.assertEqual(len(self.writer.messages), 1)
+        self.assertEqual(self.writer.messages[0]["cmd"], 2)
+        self.assertEqual(self.writer.messages[0]["mode"], 3)
+        self.assertCountEqual(
+            [item["topic"] for item in self.writer.messages[0]["items"]],
+            [self.device.topic, other.topic],
+        )
+        self.assertTrue(
+            all(item["msg"]["t"] == 26 for item in self.writer.messages[0]["items"])
+        )
         await self.event()
         await self.flush()
-        self.assertEqual(len(self.writer.messages), 2)
+        self.assertEqual(len(self.writer.messages), 1)
         self.assertEqual(
             self.device.generate_feedback_msg({"on": False, "t": 18}),
             self.device.payload,
@@ -322,6 +330,57 @@ class TcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(self.writer.messages), 2)
         await self.flush()
         self.assertEqual(self.writer.messages[-1]["msg"]["t"], 39)
+
+    async def test_batch_state_reports_are_split_at_protocol_limit(self):
+        devices = [Device(self.hass, f"climate.device_{index}") for index in range(18)]
+        self.tcp._topic_to_sync = {device.topic: device for device in devices}
+
+        await self.tcp._publish_all()
+
+        self.assertEqual(len(self.writer.messages), 2)
+        self.assertEqual(len(self.writer.messages[0]["items"]), 17)
+        self.assertEqual(self.writer.messages[1]["topics"], [devices[-1].topic])
+        self.assertTrue(all(message["cmd"] == 2 for message in self.writer.messages))
+        self.assertTrue(all(message["mode"] == 3 for message in self.writer.messages))
+        self.assertEqual(
+            {
+                item["topic"]
+                for item in self.writer.messages[0]["items"]
+            }
+            | set(self.writer.messages[1]["topics"]),
+            {device.topic for device in devices},
+        )
+
+    async def test_oversized_state_is_not_put_into_a_batch(self):
+        oversized = Device(self.hass, "climate.oversized")
+        oversized.payload["text"] = "x" * 300
+        self.tcp._topic_to_sync = {
+            oversized.topic: oversized,
+            self.device.topic: self.device,
+        }
+
+        with self.assertLogs(CODE.tcp.LOGGER, level="WARNING") as logs:
+            await self.tcp._publish_all()
+
+        self.assertEqual(len(self.writer.messages), 1)
+        self.assertEqual(self.writer.messages[0]["topics"], [self.device.topic])
+        self.assertIn("message exceeds 256 bytes", "\n".join(logs.output))
+
+    async def test_simultaneous_state_events_share_batch_reports(self):
+        devices = [Device(self.hass, f"climate.device_{index}") for index in range(3)]
+        self.tcp._topic_to_sync = {device.topic: device for device in devices}
+
+        # Give simultaneous events the same deadline, independent of CPU load.
+        with patch.object(self.hass.loop, "time", return_value=self.hass.loop.time()):
+            for device in devices:
+                await self.event(device)
+        await self.flush()
+
+        self.assertEqual(len(self.writer.messages), 1)
+        self.assertCountEqual(
+            [item["topic"] for item in self.writer.messages[0]["items"]],
+            [device.topic for device in devices],
+        )
 
     async def test_changes_during_writer_drain_are_eventually_sent(self):
         self.writer.gate = asyncio.Event()
@@ -577,11 +636,12 @@ class TcpTests(unittest.IsolatedAsyncioTestCase):
                 await self.tcp.async_add_syncs([first, second])
                 for _ in range(2):
                     messages = [
-                        await asyncio.wait_for(received.get(), 1) for _ in range(3)
+                        await asyncio.wait_for(received.get(), 1) for _ in range(2)
                     ]
                     states = [msg for msg in messages if msg["cmd"] == 2]
+                    self.assertEqual(len(states), 1)
                     self.assertCountEqual(
-                        [msg["topics"][0] for msg in states],
+                        [item["topic"] for item in states[0]["items"]],
                         [first.topic, second.topic],
                     )
                     if len(peers) == 1:
