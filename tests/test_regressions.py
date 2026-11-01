@@ -370,8 +370,10 @@ class TcpTests(unittest.IsolatedAsyncioTestCase):
         devices = [Device(self.hass, f"climate.device_{index}") for index in range(3)]
         self.tcp._topic_to_sync = {device.topic: device for device in devices}
 
-        for device in devices:
-            await self.event(device)
+        # Give simultaneous events the same deadline, independent of CPU load.
+        with patch.object(self.hass.loop, "time", return_value=self.hass.loop.time()):
+            for device in devices:
+                await self.event(device)
         await self.flush()
 
         self.assertEqual(len(self.writer.messages), 1)
